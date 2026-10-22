@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'node:fs';
 import type { Server } from 'node:http';
+import { createRequire } from 'node:module';
+import { userInfo } from 'node:os';
 import { join, relative, sep } from 'node:path';
 
 import {
@@ -24,6 +27,7 @@ import { serve } from '@hono/node-server';
 import {
   LOCAL_SCOPE,
   controlStoresFor,
+  createAlwaysAllow,
   createApprovalService,
   createArtifactService,
   createBackupService,
@@ -43,6 +47,8 @@ import {
   createCheckpointService,
   createBenchService,
   createProcessService,
+  createLanguageService,
+  pyrightCommand,
   createProviderService,
   createDomainRegistry,
   createDomainService,
@@ -58,7 +64,9 @@ import {
   createWorkspaceService,
   createWsHub,
   guardrailStoreFor,
+  HttpError,
   haltActiveRuns,
+  isHostAllowed,
   isOriginAllowed,
   loadEngineConfig,
   logDirectory,
@@ -116,8 +124,10 @@ import {
 import {
   CannedSearchBackend,
   McpManager,
+  ToolError,
   ToolRegistry,
   cannedResultsAt,
+  classifyCommand,
   createAgentSession,
   createFsProjectFiles,
   type AgentCommandObserver,
@@ -125,11 +135,13 @@ import {
   createGitCheckpointStore,
   createProcessRunner,
   registerBuiltinTools,
+  resolveAgentShell,
 } from '@ace/tools';
 import { WebSocketServer } from 'ws';
 
 import { migrateFullAutoProviders } from './full-auto-migration.js';
 import { createPricingLoader } from './pricing.js';
+import { settingsSearchBackend } from './search-backend.js';
 
 export const ENGINE_VERSION = '0.1.0';
 
@@ -334,6 +346,61 @@ export function writeSessionTokenFile(dataDir: string, token: string): string {
   return path;
 }
 
+/** `NT AUTHORITY\SYSTEM` by its well-known SID, which no Windows language translates. */
+const SYSTEM_SID = '*S-1-5-18';
+
+/**
+ * [audit S-4] The `icacls` arguments that leave `path` to `user` and SYSTEM alone: `/inheritance:r`
+ * drops every entry the file inherited from its folder, and `/grant:r` gives the two of them full
+ * control, replacing any explicit entry they had.
+ */
+export function tokenFileAclArgs(path: string, user: string): string[] {
+  return [path, '/inheritance:r', '/grant:r', `${user}:F`, `${SYSTEM_SID}:F`];
+}
+
+/** `DOMAIN\user` when Windows names a domain (or the machine), else the bare user name. */
+export function windowsAccountName(username: string, domain: string | undefined): string {
+  return domain === undefined || domain === '' ? username : `${domain}\\${username}`;
+}
+
+/** Runs a program without a shell and reports how it ended. Injected so a test runs no `icacls`. */
+export type ExecFileRunner = (
+  file: string,
+  args: string[],
+  done: (error: Error | null) => void,
+) => void;
+
+const runExecFile: ExecFileRunner = (file, args, done) => {
+  execFile(file, args, { windowsHide: true }, (error) => done(error));
+};
+
+/**
+ * [audit S-4] Windows ignores `mode: 0o600`, so the token file takes its folder's ACL — which can
+ * let other principals read it (a sandbox users group, say). After writing it, `icacls` (no shell)
+ * cuts it down to this user and SYSTEM. Best-effort and in the background: a failure is a warning,
+ * never a failed start, and only the token file is touched — never the data directory's ACL.
+ */
+export function restrictTokenFileAcl(
+  path: string,
+  warn: (payload: Record<string, unknown>, message: string) => void,
+  options: { platform?: NodeJS.Platform; user?: string; run?: ExecFileRunner } = {},
+): void {
+  if ((options.platform ?? process.platform) !== 'win32') return;
+  const failed = (error: unknown): void =>
+    warn(
+      { subsystem: 'server', err: error },
+      'could not restrict the session token file to this user',
+    );
+  try {
+    const user = options.user ?? windowsAccountName(userInfo().username, process.env['USERDOMAIN']);
+    (options.run ?? runExecFile)('icacls', tokenFileAclArgs(path, user), (error) => {
+      if (error !== null) failed(error);
+    });
+  } catch (error) {
+    failed(error);
+  }
+}
+
 /** The §2.10 line the user copies to open the app. */
 export function readyLine(url: string, webOrigin: string, token: string): string {
   return `ACE engine ready · ${url} · open ${webOrigin}/?token=${token}`;
@@ -391,7 +458,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   const token = generateSessionToken();
   const auth = new SessionTokenAuth(token);
-  writeSessionTokenFile(config.dataDir, token);
+  restrictTokenFileAcl(writeSessionTokenFile(config.dataDir, token), (payload, message) =>
+    logger.warn(payload, message),
+  );
 
   // Settings must exist before the origin guard reads them on the first request.
   await repository.settings.update(LOCAL_SCOPE, { dataDir: config.dataDir });
@@ -438,6 +507,16 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     logger: logger.child({ subsystem: 'processes' }),
     onPersonCommand: (projectId, processId, running) =>
       checkpoints.notePersonCommand(projectId, processId, running),
+    // Task 14: Forge's Kill on a running background agent command goes to the run's agent session.
+    killAgentCommand: async (runId, sessionProcessId) =>
+      (await agentSessions.get(runId)?.processes.kill(sessionProcessId)) ?? false,
+  });
+  // Forge's Python IntelliSense: a Pyright language server per project, while it is being edited.
+  const language = createLanguageService({
+    repository,
+    scope: LOCAL_SCOPE,
+    logger: logger.child({ subsystem: 'language' }),
+    pyright: pyrightCommand(createRequire(import.meta.url).resolve('pyright/langserver.index.js')),
   });
   const hub = createWsHub({
     bus,
@@ -564,13 +643,22 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
     onDecided: async (request, decision) => {
       // Approved: the node picks up exactly where it paused. Rejected: it stays WAITING until the
-      // evaluator fails it, so the row never claims to be running something nobody allowed.
-      if (decision.decision !== 'approve') return;
+      // evaluator fails it, so the row never claims to be running something nobody allowed —
+      // except an agentic node's command (D375): a denied command is fed back to the model and
+      // the node goes on, so it is RUNNING again (and only from WAITING: never over an ending).
+      if (decision.decision !== 'approve') {
+        if (request.command === undefined) return;
+        const current = await repository.nodeRuns.get(LOCAL_SCOPE, request.nodeRunId);
+        if (current?.status !== 'WAITING') return;
+      }
       const row = await repository.nodeRuns.update(LOCAL_SCOPE, request.nodeRunId, {
         status: 'RUNNING',
       });
       await emitNodeState(request.runId, row, 'RUNNING');
     },
+    // D376: Always allow — the live run asks no more for that prefix, and the node keeps it.
+    onAlways: (runId, nodeId, prefix) => alwaysAllow(runId, nodeId, prefix),
+    logger: logger.child({ subsystem: 'approvals' }),
   });
 
   const guardrails = createGuardrailEvaluator({
@@ -632,20 +720,25 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   /*
    * The tool registry: the thirteen built-ins (§2.2's six, then X1's seven), plus whatever MCP
-   * servers connect. The built-ins default to the child-process sandbox (D13) and the canned search
-   * backend (D14), so this needs no Docker and no network. The MCP manager registers a connected server's tools into
+   * servers connect. The built-ins default to the child-process sandbox (D13) and, until Settings
+   * name a SearXNG, the canned search backend (D14), so this needs no Docker and no network. The MCP manager registers a connected server's tools into
    * the same registry, and `DELETE /mcp-servers/:id` drops them again (FR-TOOL-007).
    */
   const toolRegistry = new ToolRegistry();
-  registerBuiltinTools(
-    toolRegistry,
-    options.cannedSearchBaseUrl === undefined
-      ? {}
-      : {
-          searchBackend: new CannedSearchBackend({}, cannedResultsAt(options.cannedSearchBaseUrl)),
-        },
-  );
+  registerBuiltinTools(toolRegistry, {
+    // [audit U-3] SearXNG once Settings name one (D14, D-084), read at each search; the canned
+    // index otherwise. It used to be the canned index always, whatever Settings said.
+    searchBackend: settingsSearchBackend(
+      async () => (await repository.settings.get(LOCAL_SCOPE)).searxngUrl,
+      options.cannedSearchBaseUrl === undefined
+        ? new CannedSearchBackend()
+        : new CannedSearchBackend({}, cannedResultsAt(options.cannedSearchBaseUrl)),
+    ),
+  });
   const mcpManager = new McpManager({ registry: toolRegistry });
+  /** [audit U-3] D16: whether MCP servers may be used at all, read when it matters. */
+  const mcpEnabled = async (): Promise<boolean> =>
+    (await repository.settings.get(LOCAL_SCOPE)).mcpEnabled;
   const toolLogger = logger.child({ subsystem: 'tools' });
 
   /*
@@ -682,6 +775,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
                 nodeId: spec.nodeId,
                 command: spec.command,
                 cwd,
+                background: spec.background,
+                ...(spec.processId === undefined ? {} : { sessionProcessId: spec.processId }),
               }),
         );
         return {
@@ -712,8 +807,16 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       if (registered === undefined) return undefined;
       return {
         definition: registered.definition,
-        run: (args, ctx) =>
-          registered.implementation(args, {
+        run: async (args, ctx) => {
+          // [audit U-3] A server connected before MCP was turned off in Settings is not called.
+          if (registered.definition.source === 'mcp' && !(await mcpEnabled())) {
+            throw new ToolError(
+              'unavailable',
+              name,
+              'MCP is turned off in Settings, so this MCP tool cannot run.',
+            );
+          }
+          return registered.implementation(args, {
             scope: LOCAL_SCOPE,
             runId: ctx.runId,
             sandboxDir: ctx.sandboxDir,
@@ -721,9 +824,11 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
             ...(ctx.nodeId === undefined || ctx.projectDir === undefined
               ? {}
               : { nodeId: ctx.nodeId, session: agentSessionFor(ctx.runId, ctx.projectDir) }),
+            ...(ctx.allowedDomains === undefined ? {} : { allowedDomains: ctx.allowedDomains }),
             logger: toolLogger,
             signal: ctx.signal,
-          }),
+          });
+        },
       };
     },
   };
@@ -912,6 +1017,13 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     artifacts: materialiser,
     recordToolCall,
     toolGuardrails,
+    // D376: an agentic node's commands are judged against its allowed commands.
+    classifyCommand,
+    // D375: the OS and the shell an agentic node's rules name — the shell `run_command` runs in.
+    agentEnvironment: {
+      os: process.platform,
+      shell: resolveAgentShell({ platform: process.platform, env: process.env }).label,
+    },
     /* Round 5's context, memory, retrieval, summaries and day totals (§2.2–§2.6). */
     summariser,
     search,
@@ -1021,6 +1133,16 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     list: () => repository.mcpServers.list(LOCAL_SCOPE),
     get: (id) => repository.mcpServers.get(LOCAL_SCOPE, id),
     async create(request) {
+      // [audit U-3] D16: with MCP off in Settings no server is connected — not even to try it.
+      if (!(await mcpEnabled())) {
+        throw new HttpError(
+          'invalid_config',
+          'validation_failed',
+          'MCP is turned off in Settings. Turn it on to add an MCP server.',
+          { setting: 'mcpEnabled' },
+          false,
+        );
+      }
       const id = newId();
       const server = await mcpManager.register(id, request);
       const created = await repository.mcpServers.create(LOCAL_SCOPE, server);
@@ -1123,6 +1245,21 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
     // Round 4 §2.4 (D-069): validation checks every agent's enabled tools against the live registry.
     tools: toolProvider,
+    // [audit E-8] A project created without a folder gets `<dataDir>/projects/<id>`, not a folder
+    // under whatever directory the engine was started from.
+    projectsRoot: join(config.dataDir, 'projects'),
+  });
+
+  /*
+   * D376: what the approval service's `onAlways` does — the prefix joins the live run's allowlist,
+   * then the saved workflow's node through the graph service (version bump, workflow.updated). The
+   * run snapshot is never written (BR-04).
+   */
+  const alwaysAllow = createAlwaysAllow({
+    allowlistFor: (runId) => runs.allowlistFor(runId),
+    workflowOf: async (runId) => (await repository.runs.get(LOCAL_SCOPE, runId))?.workflowId,
+    graph,
+    logger: logger.child({ subsystem: 'approvals' }),
   });
 
   /*
@@ -1190,6 +1327,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   // Filled once the server is bound: with `port: 0` the configured port is not the real one
   // (D301). The gateway reads this array on every request, so filling it in place is enough.
   const selfOrigins: string[] = [];
+  // [audit S-7] The Host values a request may carry, from the same bound port, filled the same way.
+  const selfHosts: string[] = [];
   const app = createEngineApp({
     repository,
     auth,
@@ -1201,6 +1340,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     runs,
     bus,
     selfOrigins,
+    selfHosts,
     /* Round 3's three sub-routers (§2.5, D121). */
     controls,
     /* Domain (D309, D323): messages to a run's nodes, and ending a run started from Domain. */
@@ -1226,6 +1366,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     processes,
     /* IDE (D300): review, keep and revert agents' changes. */
     checkpoints,
+    /* Forge's Python IntelliSense. */
+    language,
     /* PG-5.6: ACE Bench. */
     bench,
   });
@@ -1241,6 +1383,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
   const bound = server.address() as { port: number; address: string };
   const actualPort = bound.port;
   selfOrigins.push(`http://${BIND_HOST}:${actualPort}`, `http://localhost:${actualPort}`);
+  selfHosts.push(`${BIND_HOST}:${actualPort}`, `localhost:${actualPort}`, `[::1]:${actualPort}`);
   const url = `http://${BIND_HOST}:${actualPort}`;
 
   /* --------------------------------------------------------------- websocket */
@@ -1256,10 +1399,17 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       return;
     }
     const origin = request.headers.origin;
+    const host = request.headers.host;
 
     isOriginAllowed(originDeps, origin).then(
       (allowed) => {
         wss.handleUpgrade(request, socket, head, (ws) => {
+          // [audit S-7]: a DNS-rebound page's upgrade names its own host; refused like a foreign Origin.
+          if (!isHostAllowed(selfHosts, host)) {
+            logger.warn({ subsystem: 'ws', host }, 'refused a WebSocket for a foreign host');
+            ws.close(WS_CLOSE_FORBIDDEN_ORIGIN, 'forbidden host');
+            return;
+          }
           if (!allowed) {
             // design §7: the same allow-list as REST. Completed, then closed rather than
             // destroyed, so the client learns why and does not retry (FR-SYS-003).
@@ -1340,6 +1490,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
         bus,
         logger: logger.child({ subsystem: 'runs' }),
         approvals,
+        // [audit E-7] D323: a run started from Domain stays open across a restart, clean or not.
+        keepOpen: (run) => run.domain?.stayOpen === true,
       });
 
       // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.
@@ -1351,6 +1503,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       // database closes; none outlives the engine, even if an earlier step above rejected.
       workspace.stopAll();
       await processes.stopAll();
+      await language.stopAll();
       // PG-1.4 (D359): an Ollama this engine started stops with it; one the person started stays.
       await providers.stopLocalRuntime().catch(() => undefined);
       await Promise.all([...agentSessions.keys()].map((runId) => endAgentSession(runId)));

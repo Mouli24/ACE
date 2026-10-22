@@ -115,7 +115,7 @@ export function useTryModel(providerId: Id) {
 /* ---------------------------------------------------------------------------- pieces */
 
 const NOTE = 'text-[12px] text-[var(--muted)]';
-const ERROR = 'text-[12px] text-[#c94c27]';
+const ERROR = 'text-[12px] text-danger';
 
 /**
  * What the Local & open section says when there is no Ollama provider: not installed (with the
@@ -229,7 +229,7 @@ export function LocalModelActions({
         {loaded ? 'Unload' : 'Load'}
       </Button>
       {(load.isError || unload.isError) && (
-        <span role="alert" className="text-[10.5px] text-[#c94c27]">
+        <span role="alert" className="text-[10.5px] text-danger">
           {(load.error ?? unload.error)?.message}
         </span>
       )}
@@ -240,11 +240,12 @@ export function LocalModelActions({
 /** "Pull a model": a name, a button, then live progress from `model.pull`. */
 export function PullModelForm({ provider }: { provider: Provider }) {
   const [name, setName] = useState('');
+  /** [audit P-20] Pull with an empty field asks for a name — it never downloads the suggestion. */
+  const [needsName, setNeedsName] = useState(false);
   const progress = usePullProgress(provider.id);
   const pull = useMutation({
     mutationFn: (model: string) => api().pullLocalModel(provider.id, model),
   });
-  const wanted = name.trim() === '' ? SUGGESTED_LOCAL_MODEL : name.trim();
   const active = Object.values(progress).filter(
     (frame) => !frame.done || frame.error !== undefined,
   );
@@ -255,14 +256,20 @@ export function PullModelForm({ provider }: { provider: Provider }) {
         className="flex items-center gap-[6px]"
         onSubmit={(event) => {
           event.preventDefault();
-          pull.mutate(wanted);
+          const wanted = name.trim();
+          setNeedsName(wanted === '');
+          if (wanted !== '') pull.mutate(wanted);
         }}
       >
         <Input
           aria-label="Model to pull"
           placeholder={SUGGESTED_LOCAL_MODEL}
           value={name}
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => {
+            setName(event.target.value);
+            setNeedsName(false);
+          }}
+          aria-invalid={needsName ? true : undefined}
           className="h-[28px] flex-1 font-machine text-[12px]"
         />
         <Button type="submit" size="sm" variant="secondary" disabled={pull.isPending}>
@@ -270,6 +277,11 @@ export function PullModelForm({ provider }: { provider: Provider }) {
           Pull a model
         </Button>
       </form>
+      {needsName && (
+        <p role="alert" className={ERROR}>
+          Type the name of a model to pull — for example {SUGGESTED_LOCAL_MODEL}.
+        </p>
+      )}
       {pull.isError && (
         <p role="alert" className={ERROR}>
           {pull.error.message}

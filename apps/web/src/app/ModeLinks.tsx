@@ -46,7 +46,7 @@ export function ModeLinks({
           key={mode}
           to={modeHref(projectId, workflowId, mode, runId)}
           data-testid={`${testIdPrefix}-${mode}`}
-          className="inline-flex h-[24px] items-center whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[10px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="inline-flex h-[24px] items-center whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[10px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
         >
           {MODE_LABEL[mode]}
         </Link>

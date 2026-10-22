@@ -28,7 +28,7 @@ export function ToolsLibraryPage() {
           <h2 className="text-[14px] font-bold">Registry</h2>
           {tools.isPending && <p className="text-[13px] text-[var(--muted)]">Loading tools…</p>}
           {tools.isError && (
-            <p role="alert" className="text-[12px] text-[#c94c27]">
+            <p role="alert" className="text-[12px] text-danger">
               Could not load tools: {tools.error.message}
             </p>
           )}

@@ -1,4 +1,4 @@
-import { isAddressableNode, type Node, type NodeState } from '@ace/contracts';
+import { isAddressableNode, isAgentic, type Node, type NodeState } from '@ace/contracts';
 import type { PersistedRunEvent } from '@ace/sdk';
 import { useMemo } from 'react';
 
@@ -95,6 +95,8 @@ export interface FileTouch {
   at: string;
   /** `undefined`: the whole file; otherwise the new texts of the edit (D334). */
   edit: readonly string[] | undefined;
+  /** D378: a command changed the file (`run_command`'s `changedPaths`), so no line range is known. */
+  viaCommand?: boolean;
 }
 
 export interface ForgeAttribution {
@@ -114,6 +116,10 @@ export interface AttributionSources {
   agents: ReadonlyMap<string, AgentLook>;
   /** The project's folder on disk, to make absolute paths relative. */
   folderPath: string | undefined;
+  /** D381: the tool call in flight on a node, from `tool.started` to its `tool.call`. */
+  activeTool?(nodeId: string): { name: string; target?: string } | undefined;
+  /** D381: whether the node works in the project (agentic); only its live badge follows the tool. */
+  isAgentic?(nodeId: string): boolean;
 }
 
 /** Fold the run's frames, in order, into who wrote each file last and who is writing it now. */
@@ -127,11 +133,23 @@ export function attribute(
     if (event.type !== 'tool.call') continue;
     const { toolCall, nodeRunId } = event.payload;
     // A refused or failed call changed nothing on disk.
-    if (!WRITE_TOOLS.has(toolCall.toolName) || toolCall.status !== 'ok') continue;
+    if (toolCall.status !== 'ok') continue;
     const nodeId = sources.nodeIdOf(nodeRunId);
     const agent = nodeId === undefined ? undefined : sources.agents.get(nodeId);
     if (nodeId === undefined || agent === undefined) continue;
-    const running = sources.nodeState(nodeId) === 'RUNNING';
+    // D378: a command's changed files are credited to the node, whole-file, via the command.
+    if (toolCall.toolName === 'run_command') {
+      for (const raw of toolCall.changedPaths ?? []) {
+        const path = projectPath(raw, sources.folderPath);
+        if (path === undefined) continue;
+        last.set(path, { agent, nodeRunId, at: toolCall.at, edit: undefined, viaCommand: true });
+      }
+      continue;
+    }
+    if (!WRITE_TOOLS.has(toolCall.toolName)) continue;
+    // an agentic node's live badge follows its tool in flight (below), not what it touched
+    const following = sources.isAgentic?.(nodeId) === true;
+    const running = !following && sources.nodeState(nodeId) === 'RUNNING';
     const edit = editedTexts(toolCall.args);
     for (const raw of writtenPaths(toolCall.args)) {
       const path = projectPath(raw, sources.folderPath);
@@ -139,6 +157,14 @@ export function attribute(
       last.set(path, { agent, nodeRunId, at: toolCall.at, edit });
       if (running) live.set(path, agent);
     }
+  }
+  // D381: the file an agentic node's write is on right now, from its `tool.started` to its `tool.call`.
+  for (const [nodeId, agent] of sources.agents) {
+    if (sources.isAgentic?.(nodeId) !== true || sources.nodeState(nodeId) !== 'RUNNING') continue;
+    const tool = sources.activeTool?.(nodeId);
+    if (tool === undefined || !WRITE_TOOLS.has(tool.name) || tool.target === undefined) continue;
+    const path = projectPath(tool.target, sources.folderPath);
+    if (path !== undefined) live.set(path, agent);
   }
   return { live, last };
 }
@@ -242,7 +268,12 @@ export function useForgeAttribution(
   const revision = useRunStore((store) => {
     if (workflowId === undefined || store.workflowId !== workflowId) return '';
     const frames = store.events().length;
-    return frames === 0 ? '' : `${store.runId ?? ''}:${frames}`;
+    // the tools in flight move the live badge without a persisted frame (D381)
+    const tools = store
+      .nodeRuns()
+      .map((run) => run.activeTool?.callId ?? '')
+      .join(',');
+    return frames === 0 ? '' : `${store.runId ?? ''}:${frames}:${tools}`;
   });
   return useMemo(() => {
     if (revision === '' || nodes === undefined) return NO_ATTRIBUTION;
@@ -252,6 +283,11 @@ export function useForgeAttribution(
       nodeState: (nodeId) => store.nodeState(nodeId),
       agents: agentMap(nodes),
       folderPath,
+      activeTool: (nodeId) => store.nodeRun(nodeId)?.activeTool,
+      isAgentic: (nodeId) => {
+        const node = nodes.find((each) => each.id === nodeId);
+        return node !== undefined && node.kind === 'agent' && isAgentic(node.config);
+      },
     });
   }, [revision, nodes, folderPath]);
 }

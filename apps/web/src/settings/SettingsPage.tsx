@@ -9,6 +9,7 @@ import { Input, ProviderStatusChip, toast } from '@ace/ui';
 import { useId, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
+import { QueryError } from '../app/QueryError';
 import { useProviders } from '../providers/hooks';
 import { useThemeMode } from '../theme/mode';
 import { Toggle } from '../theme/primitives';
@@ -56,6 +57,12 @@ export function readSearxngUrl(raw: string, current: string | undefined): DraftR
 }
 
 const NO_PROVIDER = '__none__';
+
+/**
+ * Audit U-3: a setting the engine stores but does not read yet. Its field stays, shown disabled
+ * with this note, rather than promising an effect it does not have; the key is kept.
+ */
+const NOT_ACTIVE = 'Not active yet.';
 
 /** The theme select's three choices (D329), in its order. */
 const THEME_OPTIONS: readonly { value: Theme; label: string }[] = [
@@ -119,7 +126,7 @@ function SwitchRow({
       data-testid={testId}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="flex cursor-pointer items-center gap-[10px] rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-[10px] text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50"
+      className="flex cursor-pointer items-center gap-[10px] rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-[10px] text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span className="min-w-0 flex-1">
         <span id={titleId} className="block text-[12.5px] font-semibold">
@@ -191,6 +198,16 @@ export function SettingsPage() {
       <div className="mx-auto flex w-full max-w-[960px] flex-col gap-6 px-6 py-8">
         <h1 className="text-[20px] font-bold tracking-[-0.01em]">Settings</h1>
 
+        {/* Audit U-9: the fields stay disabled without the engine's values; say why, and retry. */}
+        {settings.isError && (
+          <QueryError
+            what="the settings"
+            error={settings.error}
+            onRetry={() => void settings.refetch()}
+            className="items-start rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4"
+          />
+        )}
+
         <Section title="General" testId="settings-general">
           <SettingField
             label="Data folder"
@@ -211,7 +228,7 @@ export function SettingsPage() {
                 aria-label="Copy data folder path"
                 onClick={copyDataDir}
                 disabled={disabled}
-                className="absolute right-[6px] top-[6px] h-[26px] cursor-pointer rounded-[7px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[11px] font-semibold text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50"
+                className="absolute right-[6px] top-[6px] h-[26px] cursor-pointer rounded-[7px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[11px] font-semibold text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Copy
               </button>
@@ -219,17 +236,18 @@ export function SettingsPage() {
           </SettingField>
 
           <div className={FIELD_GRID}>
+            {/* Audit U-3: saved but read by nothing yet, so it is shown as it is and not offered. */}
             <SelectField
               id="settings-default-provider"
               label="Default provider"
-              hint="Used by new agents that do not name one."
+              hint={`${NOT_ACTIVE} Each agent uses the provider and model it names.`}
               testId="settings-default-provider"
               value={data?.defaultProviderId ?? NO_PROVIDER}
               options={providerOptions}
               onChange={(value) => {
                 if (value !== NO_PROVIDER) void save({ defaultProviderId: value });
               }}
-              disabled={disabled}
+              disabled
             />
 
             <SettingInput
@@ -291,15 +309,16 @@ export function SettingsPage() {
               disabled={disabled}
               placeholder="http://localhost:8080"
             />
+            {/* Audit U-3: the engine always uses the child-process sandbox for now. */}
             <SelectField<DockerSandboxMode>
               id="settings-docker"
               label="Docker sandbox"
-              hint="auto uses Docker when it is available and a limited child process otherwise."
+              hint={`${NOT_ACTIVE} Code runs in a limited child process.`}
               testId="settings-docker"
               value={data?.dockerSandbox ?? 'auto'}
               options={DOCKER_SANDBOX_MODES.map((mode) => ({ value: mode, label: mode }))}
               onChange={(dockerSandbox) => void save({ dockerSandbox })}
-              disabled={disabled}
+              disabled
             />
           </div>
           <SwitchRow

@@ -1,6 +1,7 @@
 import type { Part } from '@ace/contracts';
 import { render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 import { CodeBlock, highlight } from '../components/code-block.js';
 import { JsonTree } from '../components/json-tree.js';
@@ -168,5 +169,34 @@ describe('formatBytes', () => {
     expect(formatBytes(2048)).toBe('2 KB');
     expect(formatBytes(1024 * 1024 * 3.5)).toBe('3.5 MB');
     expect(formatBytes(-1)).toBe('—');
+  });
+});
+
+describe('[audit S-10] Markdown stays fast on pathological input', () => {
+  /** Milliseconds to render `text` to markup — the parse, the elements and the string. */
+  const timed = (text: string): number => {
+    const start = performance.now();
+    renderToStaticMarkup(<Markdown text={text} />);
+    return performance.now() - start;
+  };
+
+  // Each took a second or more when every unclosed `[`/`](` scanned to the end of its line.
+  it.each([
+    ['20k unclosed links on one line', '[a]('.repeat(20_000)],
+    ['unclosed links on 100 lines under the long-line cap', `${'[a]('.repeat(1_999)}\n`.repeat(100)],
+    ['unclosed brackets on 100 lines', `${'['.repeat(7_999)}\n`.repeat(100)],
+  ])('%s renders within the budget', (_name, text) => {
+    expect(timed(text)).toBeLessThan(500);
+  });
+
+  it('keeps links and emphasis on ordinary lines, and shows a very long line as plain text', () => {
+    const html = renderToStaticMarkup(
+      <Markdown text={`[ok](https://example.com) **b**\n${'**x** '.repeat(2_000)}`} />,
+    );
+    expect(html).toContain('<a href="https://example.com"');
+    expect(html).toContain('<strong>b</strong>');
+    // The 12k-character line is past the cap: its marks stay as typed.
+    expect(html).toContain('**x** **x**');
+    expect(html).not.toContain('<strong>x</strong>');
   });
 });

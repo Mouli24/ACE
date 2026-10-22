@@ -10,6 +10,7 @@
 export * from './enums.js';
 export * from './errors.js';
 export * from './graph.js';
+export * from './agent.js';
 export * from './validation.js';
 export * from './graph-ops.js';
 export * from './settings.js';

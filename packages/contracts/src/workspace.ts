@@ -348,6 +348,54 @@ export const SourcesResultSchema = z.strictObject({
 export type SourcesResult = z.infer<typeof SourcesResultSchema>;
 
 /* -------------------------------------------------------------------------- */
+/* Language intelligence: Python through Pyright                              */
+/* -------------------------------------------------------------------------- */
+
+/** The languages a project's language server answers for; Monaco knows TS/JS/CSS/HTML/JSON itself. */
+export const LANGUAGE_SERVER_LANGUAGES = ['python'] as const;
+export const LanguageServerLanguageSchema = z.enum(LANGUAGE_SERVER_LANGUAGES);
+export type LanguageServerLanguage = z.infer<typeof LanguageServerLanguageSchema>;
+
+export const LANGUAGE_METHODS = [
+  'completion',
+  'completionResolve',
+  'hover',
+  'signatureHelp',
+  'diagnostics',
+] as const;
+export const LanguageMethodSchema = z.enum(LANGUAGE_METHODS);
+export type LanguageMethod = z.infer<typeof LanguageMethodSchema>;
+
+/** A zero-based LSP position: the line, and the UTF-16 offset in it. */
+export const LanguagePositionSchema = z.strictObject({
+  line: z.number().int().min(0),
+  character: z.number().int().min(0),
+});
+export type LanguagePosition = z.infer<typeof LanguagePositionSchema>;
+
+/**
+ * `POST /projects/:id/language/:language` — one question to the project's language server about
+ * one file, answered with the LSP result as the server gave it (`{ result }`). `text` is the
+ * editor's text now, saved or not; the server is told only when it differs from what it has.
+ * Every method but `completionResolve` (which takes the `item` a completion answered) needs it,
+ * and `completion`, `hover` and `signatureHelp` need a `position`. `diagnostics` answers the
+ * file's problems once the server has checked that text.
+ */
+export const LanguageRequestSchema = z.strictObject({
+  method: LanguageMethodSchema,
+  path: ProjectPathSchema.min(1),
+  text: z.string().max(FILE_EDIT_MAX_BYTES).optional(),
+  position: LanguagePositionSchema.optional(),
+  /** LSP's CompletionContext or SignatureHelpContext, passed through. */
+  context: z.unknown().optional(),
+  item: z.unknown().optional(),
+});
+export type LanguageRequest = z.infer<typeof LanguageRequestSchema>;
+
+export const LanguageResponseSchema = z.strictObject({ result: z.unknown() });
+export type LanguageResponse = z.infer<typeof LanguageResponseSchema>;
+
+/* -------------------------------------------------------------------------- */
 /* Processes: Forge's terminal (D301, design §6.3)                             */
 /* -------------------------------------------------------------------------- */
 
@@ -420,9 +468,15 @@ export type ProcessInputRequest = z.infer<typeof ProcessInputRequestSchema>;
 /**
  * PG-5.3 (D361): a command an agentic node ran with `run_command` (in the foreground or with
  * `background: true`), shown in Forge's Terminal and Processes list read-only — the run and node
- * that started it. It takes no input and is not stopped from Forge: stopping the run stops it.
+ * that started it. It takes no input. A foreground one is stopped by stopping the run; a running background one can
+ * also be killed from Forge (Task 14).
  */
-export const ProcessAgentSchema = z.strictObject({ runId: IdSchema, nodeId: IdSchema });
+export const ProcessAgentSchema = z.strictObject({
+  runId: IdSchema,
+  nodeId: IdSchema,
+  /** `true` for a `run_command` with `background: true`: Forge's Kill can end it (Task 14). */
+  background: z.boolean(),
+});
 export type ProcessAgent = z.infer<typeof ProcessAgentSchema>;
 
 /**

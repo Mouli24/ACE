@@ -237,7 +237,7 @@ describe('D331 the workspace menu', () => {
       const { project, ideate } = seed();
       const router = renderMenu(ideate);
       const remove = await item(user, 'menu-delete-workflow');
-      expect(remove).toHaveClass('text-[#c94c27]');
+      expect(remove).toHaveClass('text-danger');
       await user.click(remove);
       const confirm = await screen.findByRole('dialog');
       await user.click(within(confirm).getByRole('button', { name: /delete/i }));
@@ -494,6 +494,8 @@ describe('D331 the workspace menu', () => {
     ['Usage', '/usage'],
     ['Guardrail policies', '/guardrails'],
     ['Tools', '/library/tools'],
+    ['Bench', '/bench'],
+    ['Setup wizard', '/onboarding'],
     ['Help', '/help/getting-started'],
   ])('ACE → %s links to %s', async (name, href) => {
     const user = userEvent.setup();

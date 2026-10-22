@@ -2121,4 +2121,3 @@ export function buildAttemptScript(
   ];
 }
 
-export type { Context as ScenarioContext };

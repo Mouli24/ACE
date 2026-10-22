@@ -2,13 +2,15 @@ import type { ChatMessage, Part } from '@ace/contracts';
 import { cn, Icons } from '@ace/ui';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
+import { ConfirmDelete } from './ConfirmDelete';
+
 /**
  * PG-1.6 (D352): what a chat message offers — Copy, Retry (an agent reply or a failed turn), Edit &
  * resend (your own message) and Delete — on hover or keyboard focus, and always on a touch screen,
  * where there is no hover.
  */
 
-const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /** The actions bar: hidden until its row is hovered or focused; always there without hover. */
 export const ACTIONS_CLASS =
@@ -109,6 +111,8 @@ export function MessageActions({
   onDelete,
   busy = false,
 }: MessageActionHandlers & { message: ChatMessage; busy?: boolean }) {
+  // [audit W-9] Delete asks first: a message has no undo
+  const [confirming, setConfirming] = useState(false);
   return (
     <div className={ACTIONS_CLASS} data-testid="chat-message-actions">
       <CopyButton text={copyText(message.content)} />
@@ -123,9 +127,21 @@ export function MessageActions({
         </ActionButton>
       )}
       {onDelete !== undefined && (
-        <ActionButton label="Delete" onClick={onDelete}>
+        <ActionButton label="Delete" onClick={() => setConfirming(true)}>
           <Icons.Trash2 aria-hidden size={14} />
         </ActionButton>
+      )}
+      {onDelete !== undefined && confirming && (
+        <ConfirmDelete
+          title="Delete this message?"
+          description="It is taken out of this conversation. This cannot be undone."
+          confirmLabel="Delete message"
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            onDelete();
+          }}
+        />
       )}
     </div>
   );
@@ -209,7 +225,7 @@ export function EditBox({
             onCancel();
           }
         }}
-        className="block w-full resize-y rounded-[10px] border border-[var(--line)] bg-[var(--surface)] px-[10px] py-[8px] text-[12.5px] leading-[1.45] text-[var(--ink)] outline-none focus:border-[#ef6b3f]"
+        className="block w-full resize-y rounded-[10px] border border-[var(--line)] bg-[var(--surface)] px-[10px] py-[8px] text-[12.5px] leading-[1.45] text-[var(--ink)] outline-none focus:border-[var(--focus)]"
       />
       {changedFiles > 0 && (
         <label className="flex items-center gap-2 text-[11px] text-[var(--muted)]">

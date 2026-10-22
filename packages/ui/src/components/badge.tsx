@@ -11,7 +11,7 @@ export const badgeVariants = cva(
       variant: {
         default: 'bg-[var(--hover)] text-[var(--ink)]',
         accent: 'bg-[rgba(239,107,63,0.12)] text-[#e8572e]',
-        danger: 'bg-[rgba(201,76,39,0.12)] text-[#c94c27]',
+        danger: 'bg-[rgba(201,76,39,0.12)] text-danger',
         outline: 'border border-[var(--line)] text-[var(--muted)]',
       },
     },

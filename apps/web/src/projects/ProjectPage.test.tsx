@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 
-import { db, installMockServer, processes, renderApp } from '../test/app';
+import { db, installMockServer, processes, renderApp, server } from '../test/app';
 
 installMockServer();
 
@@ -183,5 +184,45 @@ describe('D299 Phase 4 a project names its check command and format-on-save', ()
     await user.click(await screen.findByRole('option', { name: 'On' }));
     await waitFor(() => expect(db.getProject(project.id)?.formatOnSave).toBe(true));
     expect(select).toHaveTextContent('On');
+  });
+});
+
+describe('audit U-2 (D-009) "not found" means the engine said 404', () => {
+  it('a 404 still reads "Project not found", with the way back', async () => {
+    renderApp('/projects/01J9ZZZZZZZZZZZZZZZZZZZZZZ');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Project not found.');
+    expect(within(alert).getByRole('link', { name: 'Back to projects' })).toBeInTheDocument();
+  });
+
+  it('any other failure shows the engine’s words and Retry, which loads the project', async () => {
+    const user = userEvent.setup();
+    const project = db.createProject({ name: 'Atlas' });
+    let fail = true;
+    server.use(
+      http.get('*/api/v1/projects/:id', () =>
+        fail
+          ? HttpResponse.json(
+              {
+                error: {
+                  kind: 'workflow',
+                  code: 'internal',
+                  message: 'Database is locked.',
+                  retryable: true,
+                },
+              },
+              { status: 500 },
+            )
+          : undefined,
+      ),
+    );
+    renderApp(`/projects/${project.id}`);
+    const error = await screen.findByTestId('query-error');
+    expect(error).toHaveTextContent('Could not load this project: Database is locked.');
+    expect(error).not.toHaveTextContent('not found');
+
+    fail = false;
+    await user.click(within(error).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Atlas' })).toBeInTheDocument();
   });
 });

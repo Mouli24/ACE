@@ -34,7 +34,7 @@ export function RunsList({ workflowId }: { workflowId: string }) {
   }
   if (runs.isError) {
     return (
-      <p role="alert" className="m-0 py-[10px] text-[13px] text-[#c94c27]">
+      <p role="alert" className="m-0 py-[10px] text-[13px] text-danger">
         Could not load runs: {runs.error.message}
       </p>
     );
@@ -66,7 +66,7 @@ export function RunsList({ workflowId }: { workflowId: string }) {
             <Link
               to={`/runs/compare?a=${picked[0]}&b=${picked[1]}`}
               data-testid="runs-compare"
-              className="inline-flex h-[28px] items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+              className="inline-flex h-[28px] items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
             >
               Compare runs
             </Link>
@@ -98,7 +98,7 @@ export function RunsList({ workflowId }: { workflowId: string }) {
             />
             <Link
               to={`/runs/${run.id}`}
-              className="flex min-h-11 min-w-0 flex-1 flex-col justify-center gap-[3px] rounded-[7px] py-[8px] text-[12.5px] text-[var(--ink)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+              className="flex min-h-11 min-w-0 flex-1 flex-col justify-center gap-[3px] rounded-[7px] py-[8px] text-[12.5px] text-[var(--ink)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
             >
               <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                 <span>{new Date(run.startedAt).toLocaleString()}</span>

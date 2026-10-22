@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../app/api';
 import { useLayoutStore } from '../../app/stores/layout';
 import { useProject } from '../../projects/hooks';
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { ago } from '../../theme/format';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
@@ -30,7 +30,7 @@ const ICON: Record<ProblemSeverity, JSX.Element> = {
     <span
       role="img"
       aria-label="Error"
-      className="w-[12px] shrink-0 text-center text-[11px] text-[#c94c27]"
+      className="w-[12px] shrink-0 text-center text-[11px] text-danger"
     >
       ✕
     </span>
@@ -91,11 +91,7 @@ function ProblemGroups({
       {[...groups].map(([path, list]) => (
         <section key={path} aria-label={path} className="flex flex-col gap-[6px]">
           <div className="flex min-w-0 items-center gap-[7px] text-[12.5px]">
-            <span
-              aria-hidden
-              className="h-[8px] w-[8px] shrink-0 rounded-full"
-              style={{ background: fileIconColor(path) }}
-            />
+            <FileIcon path={path} />
             <span className="shrink-0 font-semibold text-[var(--ink)]">{nameOf(path)}</span>
             <span className="min-w-0 truncate font-machine text-[10px] text-[var(--muted)]">
               {parentOf(path)}
@@ -114,7 +110,7 @@ function ProblemGroups({
                 <button
                   type="button"
                   onClick={() => reveal(problem)}
-                  className="flex min-h-[36px] min-w-0 flex-1 cursor-pointer items-center gap-[10px] border-none bg-transparent py-[7px] pl-[14px] pr-0 text-left text-[12.5px] text-[var(--ink)] outline-none focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+                  className="flex min-h-[36px] min-w-0 flex-1 cursor-pointer items-center gap-[10px] border-none bg-transparent py-[7px] pl-[14px] pr-0 text-left text-[12.5px] text-[var(--ink)] outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]"
                 >
                   {ICON[problem.severity]}
                   <span className="min-w-0 flex-1 whitespace-pre-wrap">{problem.message}</span>
@@ -195,26 +191,26 @@ function ChecksGroup({ projectId, run }: { projectId: string; run: ChecksRun }) 
           title="Clear checks"
           onClick={() => clearChecks(projectId)}
           disabled={run.status === 'running'}
-          className="flex h-[20px] shrink-0 cursor-pointer items-center rounded-[5px] border-none bg-transparent px-[6px] text-[11px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f] disabled:cursor-default disabled:opacity-[0.45]"
+          className="flex h-[20px] shrink-0 cursor-pointer items-center rounded-[5px] border-none bg-transparent px-[6px] text-[11px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[inset_0_0_0_2px_var(--focus)] disabled:cursor-default disabled:opacity-[0.45]"
         >
           Clear
         </button>
       </div>
       {run.error !== undefined && (
-        <p role="alert" className="m-0 text-[11px] leading-[1.45] text-[#c94c27]">
+        <p role="alert" className="m-0 text-[11px] leading-[1.45] text-danger">
           {run.error}
         </p>
       )}
       {failedSilently(run) && (
         <div role="alert" className="flex min-w-0 items-center gap-[8px]">
-          <p className="m-0 min-w-0 flex-1 text-[12px] leading-[1.45] text-[#c94c27]">
+          <p className="m-0 min-w-0 flex-1 text-[12px] leading-[1.45] text-danger">
             Checks failed (exit {run.exitCode}); no problems recognised in the output
           </p>
           {run.processId !== undefined && (
             <button
               type="button"
               onClick={() => run.processId !== undefined && void showOutput(run.processId)}
-              className="flex h-[20px] shrink-0 cursor-pointer items-center rounded-[5px] border-none bg-transparent px-[6px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+              className="flex h-[20px] shrink-0 cursor-pointer items-center rounded-[5px] border-none bg-transparent px-[6px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]"
             >
               Show output
             </button>

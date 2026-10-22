@@ -34,7 +34,7 @@ export function ConfirmDialog({
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         {error && (
-          <p role="alert" className="text-[12px] text-[#c94c27]">
+          <p role="alert" className="text-[12px] text-danger">
             {error.message}
           </p>
         )}

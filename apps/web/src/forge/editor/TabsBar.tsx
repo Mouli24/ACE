@@ -9,7 +9,7 @@ import {
 } from '@ace/ui';
 import { useRef, type KeyboardEvent } from 'react';
 
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { useProjectReviews, useReviewStore } from '../changes/review-store';
 import { nameOf, parentOf } from '../files/paths';
 import { useCloseRequest } from './CloseDialogs';
@@ -83,7 +83,7 @@ export function TabsBar({ projectId }: { projectId: string }) {
                     else tabRefs.current.set(path, element);
                   }}
                   className={cn(
-                    'flex h-full cursor-pointer items-center gap-[8px] pl-[14px] outline-none focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]',
+                    'flex h-full cursor-pointer items-center gap-[8px] pl-[14px] outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]',
                     editor.preview === path && 'italic',
                     file.deletedOnDisk && 'line-through',
                   )}
@@ -99,11 +99,7 @@ export function TabsBar({ projectId }: { projectId: string }) {
                     close([path]);
                   }}
                 >
-                  <span
-                    aria-hidden
-                    className="h-[7px] w-[7px] shrink-0 rounded-full"
-                    style={{ background: fileIconColor(path) }}
-                  />
+                  <FileIcon path={path} />
                   {nameOf(path)}
                   {(nameCount.get(nameOf(path)) ?? 0) > 1 && (
                     <span className="text-[var(--muted)]">
@@ -174,7 +170,7 @@ export function TabsBar({ projectId }: { projectId: string }) {
               tabIndex={active ? 0 : -1}
               title={`${review.path} (agent change)`}
               data-testid={`review-tab-${review.path}`}
-              className="flex h-full cursor-pointer items-center gap-[8px] pl-[14px] italic outline-none focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+              className="flex h-full cursor-pointer items-center gap-[8px] pl-[14px] italic outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]"
               onClick={() => useReviewStore.getState().activate(projectId, review.key)}
               onAuxClick={(event) => {
                 if (event.button !== 1) return;
@@ -182,11 +178,7 @@ export function TabsBar({ projectId }: { projectId: string }) {
                 closeReview();
               }}
             >
-              <span
-                aria-hidden
-                className="h-[7px] w-[7px] shrink-0 rounded-full"
-                style={{ background: fileIconColor(review.path) }}
-              />
+              <FileIcon path={review.path} />
               {label}
             </div>
             <button

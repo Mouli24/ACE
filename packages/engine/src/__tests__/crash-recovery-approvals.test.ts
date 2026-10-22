@@ -76,13 +76,13 @@ async function harness(options: { failCancel?: boolean } = {}) {
   };
 
   /** What the last process left behind: a run it was driving and a node WAITING on a card. */
-  async function stranded(status: Run['status'] = 'RUNNING') {
+  async function stranded(status: Run['status'] = 'RUNNING', nodes: Run['snapshot']['nodes'] = []) {
     const run: Run = {
       id: newId(),
       workflowId: newId(),
       projectId: newId(),
       status,
-      snapshot: { version: 1, nodes: [], edges: [] },
+      snapshot: { version: 1, nodes, edges: [] },
       inputs: {},
       preflightIssues: [],
       totals: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
@@ -183,5 +183,90 @@ describe('FR-GRD-013 D111 D-061 a decision nobody in this process is waiting on 
     expect(await h.approvals.listPending(run.id)).toEqual([]);
     expect(h.moved).toEqual([]);
     expect(await h.status(nodeRun.id)).toBe('STOPPED');
+  });
+});
+
+/** A snapshot node: only `kind` and `config.workspace` matter to recovery. */
+const snapshotNode = (access: 'off' | 'edit_files'): Run['snapshot']['nodes'][number] =>
+  ({
+    id: newId(),
+    kind: 'agent',
+    name: 'Worker',
+    config: {
+      tools: { enabled: [] },
+      ...(access === 'off' ? {} : { workspace: { access, maxTurns: 10, allowedCommands: [] } }),
+    },
+  }) as unknown as Run['snapshot']['nodes'][number];
+
+describe('D379 a restart leaves an agentic step BLOCKED with the reason', () => {
+  async function twoRuns(h: Awaited<ReturnType<typeof harness>>) {
+    const running = snapshotNode('edit_files');
+    const waiting = snapshotNode('edit_files');
+    const plain = snapshotNode('off');
+    const { run } = await h.stranded('RUNNING', [running, waiting, plain]);
+    const make = async (nodeId: string, status: NodeRun['status']) => {
+      const row: NodeRun = {
+        id: newId(),
+        runId: run.id,
+        nodeId,
+        iteration: 1,
+        attempt: 1,
+        status,
+        inputEnvelopes: [],
+        usage: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+        verdicts: [],
+        toolCalls: [],
+        approvals: [],
+      };
+      await h.repository.nodeRuns.create(scope, row);
+      return row;
+    };
+    return {
+      run,
+      running: await make(running.id, 'RUNNING'),
+      waiting: await make(waiting.id, 'WAITING'),
+      plain: await make(plain.id, 'RUNNING'),
+    };
+  }
+
+  it('BLOCKs a RUNNING and a WAITING agentic step; a non-agentic one stays STOPPED', async () => {
+    const h = await harness();
+    const { running, waiting, plain } = await twoRuns(h);
+
+    await recoverAfterCrash(h.deps);
+
+    const row = (id: string) => h.repository.nodeRuns.get(scope, id);
+    expect(await row(running.id)).toMatchObject({
+      status: 'BLOCKED',
+      error: {
+        code: 'engine_restarted',
+        retryable: true,
+        message: 'The engine restarted mid-step. Background commands from this run were stopped.',
+      },
+    });
+    expect(await row(waiting.id)).toMatchObject({
+      status: 'BLOCKED',
+      error: {
+        code: 'approval_lost',
+        message:
+          'The approval was lost when the engine restarted. Background commands from this run were stopped.',
+      },
+    });
+    expect(await row(plain.id)).toMatchObject({ status: 'STOPPED' });
+    expect((await row(plain.id))?.error).toBeUndefined();
+  });
+
+  it('a Domain stayOpen run also has its pending approvals rejected', async () => {
+    const h = await harness();
+    const { run, request } = await h.stranded();
+    h.deps.keepOpen = () => true;
+
+    const result = await recoverAfterCrash(h.deps);
+
+    expect(result.reopened.map((r) => r.id)).toEqual([run.id]);
+    expect(await h.approvals.listPending(run.id)).toEqual([]);
+    expect((await h.repository.approvals.get(scope, request.id))?.decision).toMatchObject({
+      decision: 'reject',
+    });
   });
 });

@@ -31,9 +31,12 @@ export const DialogOverlay = forwardRef<
 ));
 DialogOverlay.displayName = 'DialogOverlay';
 
-/** The theme's close control for a dialog: a 28px square with an X icon (PG-1.2), named "Close". */
+/**
+ * The theme's close control for a dialog: a 28px square with an X icon (PG-1.2), named "Close".
+ * Audit U-6: keyboard focus draws a 2px ring in the AA `--focus` colour (it was a border only).
+ */
 export const DIALOG_CLOSE_CLASS =
-  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]';
+  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] focus-visible:shadow-[0_0_0_1px_var(--focus)]';
 
 export const DialogContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,

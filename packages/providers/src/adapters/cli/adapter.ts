@@ -38,13 +38,20 @@ export interface CliParser {
   finish(exit: CliExit): StreamChunk[];
 }
 
+/** What a node asks of a CLI (D383): the `GenerateRequest.cliAccess` the adapter honours. */
+export type CliAccess = NonNullable<GenerateRequest['cliAccess']>;
+
 export interface CliDialect {
   type: CliProviderType;
   /** The command on PATH. */
   bin: string;
   /** How messages name it. */
   label: string;
-  args(req: GenerateRequest, permission: CliPermission): string[];
+  /**
+   * `access` is the node's own level (D383), given only for `read_only`, `edit_files` and
+   * `edit_commands`, and only when there is a project folder; absent, `permission` is the preset.
+   */
+  args(req: GenerateRequest, permission: CliPermission, access?: CliAccess): string[];
   stdin(req: GenerateRequest): string;
   env?(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
   createParser(): CliParser;
@@ -187,10 +194,15 @@ export function createCliAdapter(dialect: CliDialect, options: CliAdapterOptions
         const scratch = req.workingDir === undefined ? mkdtempSync(join(tmpdir(), 'ace-cli-')) : undefined;
         const cwd = req.workingDir ?? (scratch as string);
         const permission: CliPermission = scratch === undefined ? options.permission : 'read_only';
+        // D383: the node's own level wins over the provider preset, but never over the scratch folder.
+        const access =
+          scratch === undefined && req.cliAccess !== undefined && req.cliAccess.access !== 'off'
+            ? req.cliAccess
+            : undefined;
 
         const run = runCli({
           command: command.command,
-          args: [...command.prefixArgs, ...dialect.args(req, permission)],
+          args: [...command.prefixArgs, ...dialect.args(req, permission, access)],
           cwd,
           env: dialect.env?.(env) ?? env,
           stdin: dialect.stdin(req),

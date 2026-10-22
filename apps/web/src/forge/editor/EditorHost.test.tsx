@@ -1,5 +1,5 @@
 import type { TextFileContent } from '@ace/contracts';
-import { render } from '@testing-library/react';
+import { act, render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { db, installMockServer, renderWithQuery } from '../../test/app';
@@ -117,6 +117,31 @@ describe('D299 the real editor host keeps each file’s place', () => {
     fake.editors[0]!.line = 7;
     view.rerender(<EditorHost projectId={P} path="b.ts" initial={undefined} />);
     expect(viewStateOf(P, 'a.ts')).toEqual({ line: 7 });
+    view.unmount();
+  });
+});
+
+describe('[audit F-11] a Space preview leaves the focus in the Explorer', () => {
+  it('takes the focus for a file opened as usual, not for one opened with focus: false', async () => {
+    const EditorHost = await realHost();
+    const focused = vi.fn();
+    // the host's own create (beforeEach) takes the element and the options
+    const create = fake.editor.create as (...args: unknown[]) => object;
+    Object.assign(fake.editor, {
+      create: (...args: unknown[]) => Object.assign(create(...args), { focus: focused }),
+    });
+    ensureModel(P, 'b.ts', 'y', 'plaintext', () => undefined);
+    useEditorStore.getState().open(P, 'a.ts');
+    const view = render(<EditorHost projectId={P} path="a.ts" initial={INITIAL} />);
+    expect(focused).toHaveBeenCalledTimes(1);
+
+    useEditorStore.getState().open(P, 'b.ts', { preview: true, focus: false });
+    view.rerender(<EditorHost projectId={P} path="b.ts" initial={undefined} />);
+    expect(focused).toHaveBeenCalledTimes(1);
+    // only that once: the next file shown (a tab clicked) takes the focus again
+    act(() => useEditorStore.getState().activate(P, 'a.ts'));
+    view.rerender(<EditorHost projectId={P} path="a.ts" initial={INITIAL} />);
+    expect(focused).toHaveBeenCalledTimes(2);
     view.unmount();
   });
 });

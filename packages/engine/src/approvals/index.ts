@@ -1,4 +1,5 @@
 import type {
+  ApprovalCommand,
   ApprovalDecision,
   ApprovalDecisionKind,
   GuardrailCheckType,
@@ -9,6 +10,7 @@ import type {
 
 import { userCancelledError } from '../errors/index.js';
 import type { EventBus } from '../events/index.js';
+import type { Logger } from '../logging/index.js';
 import { newId } from '../ids.js';
 import type { RunApprovalRequest, Scope } from '../ports/index.js';
 import type { ApprovalRepository, NodeRunLookup } from '../guardrails/ports.js';
@@ -51,6 +53,8 @@ export interface ApprovalRequestInput {
   reason: string;
   /** Already truncated to `APPROVAL_PREVIEW_MAX` by the caller (§2.2). */
   preview: string;
+  /** D376: an agentic node's `run_command`, already masked and cut by the caller. */
+  command?: ApprovalCommand;
   /**
    * The run's abort signal (FR-CTL-003, D110). Aborted — by a Stop or a shutdown — the wait throws a
    * `user_cancelled` error at once instead of waiting for a decision nobody will make (D-054).
@@ -75,6 +79,28 @@ export class ApprovalNotFoundError extends Error {
   }
 }
 
+/** What the routes answer 400 `validation_failed` with when `always: true` has nothing to save (D376). */
+export const CANNOT_ALWAYS_ALLOW = "This command can't be always-allowed.";
+
+/**
+ * D376: `always: true` on a request whose card offers no Always allow — no command, no prefix (a
+ * compound or unreadable line, a denylist hit) — or on a reject. The request stays pending.
+ */
+export class ApprovalAlwaysRefusedError extends Error {
+  override readonly name = 'ApprovalAlwaysRefusedError';
+
+  constructor(message: string = CANNOT_ALWAYS_ALLOW) {
+    super(message);
+  }
+}
+
+/** How a person decided, beyond approve or reject (FR-GRD-013, D376). */
+export interface ApprovalDecisionOptions {
+  note?: string;
+  /** Approve and always-allow the request's `command.allowPrefix` (D376; the save is best-effort). */
+  always?: boolean;
+}
+
 export class ApprovalAlreadyDecidedError extends Error {
   override readonly name = 'ApprovalAlreadyDecidedError';
 
@@ -88,12 +114,14 @@ export interface ApprovalService extends ApprovalGate {
   listPending(runId: Id): Promise<RunApprovalRequest[]>;
   /**
    * `POST /node-runs/:id/approve` and `/reject`. The route is the decision (§2.5); the answer is the
-   * node run, which the caller reads back once the decision is stored.
+   * node run, which the caller reads back once the decision is stored. D376: `always` on an approve
+   * records the request's `command.allowPrefix` with the decision and hands it to `onAlways`; with
+   * nothing to save it throws `ApprovalAlwaysRefusedError` and decides nothing.
    */
   decide(
     nodeRunId: Id,
     kind: ApprovalDecisionKind,
-    note?: string,
+    options?: ApprovalDecisionOptions,
   ): Promise<{ request: RunApprovalRequest; decision: ApprovalDecision; nodeRun: NodeRun | null }>;
   /**
    * Reject everything still waiting on a run, without a user: a Stop, a shutdown or crash recovery
@@ -121,6 +149,14 @@ export interface ApprovalServiceDeps {
    * would move is STOPPED (D111).
    */
   onDecided?: (request: RunApprovalRequest, decision: ApprovalDecision) => Promise<void>;
+  /**
+   * D376: an approve with Always allow, once it is stored and before the paused evaluation resumes —
+   * the server adds the prefix to the live run's allowlist and saves it on the workflow's node, so
+   * the node's next identical command runs without a card.
+   */
+  onAlways?: (runId: Id, nodeId: Id, prefix: string) => Promise<void>;
+  /** Where a failed `onAlways` is reported; the decision stands and the node wakes regardless. */
+  logger?: Pick<Logger, 'warn'>;
   now?: () => string;
   nextId?: () => string;
 }
@@ -152,11 +188,14 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
     request: RunApprovalRequest,
     kind: ApprovalDecisionKind,
     note: string | undefined,
+    /** D376: the prefix an Always allow saves; only ever set on an approve. */
+    alwaysPrefix?: string,
   ): Promise<ApprovalDecision> {
     const decision: ApprovalDecision = {
       requestId: request.id,
       decision: kind,
       ...(note === undefined ? {} : { note }),
+      ...(alwaysPrefix === undefined ? {} : { always: true, prefix: alwaysPrefix }),
       // FR-GRD-013: the decision is logged with its time, which is the audit trail, not a nicety.
       decidedAt: now(),
     };
@@ -182,13 +221,24 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
      */
     const waiter = waiting.get(request.id);
     waiting.delete(request.id);
-    if (waiter === undefined) return decision;
 
     try {
-      await deps.onDecided?.(request, decision);
+      // D376: saved before the node wakes, so its next identical command already finds the prefix.
+      // Best-effort: a failure is logged and never skips `onDecided` or the wake-up below.
+      if (alwaysPrefix !== undefined) {
+        try {
+          await deps.onAlways?.(request.runId, request.nodeId, alwaysPrefix);
+        } catch (error) {
+          deps.logger?.warn(
+            { subsystem: 'approvals', runId: request.runId, nodeId: request.nodeId, err: error },
+            'always allow could not be applied',
+          );
+        }
+      }
+      if (waiter !== undefined) await deps.onDecided?.(request, decision);
     } finally {
-      // Woken even if the hook failed: a node left suspended for ever is the worse outcome.
-      waiter(decision);
+      // Woken even if a hook failed: a node left suspended for ever is the worse outcome.
+      waiter?.(decision);
     }
 
     return decision;
@@ -212,6 +262,7 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
         checkType: input.checkType,
         reason: input.reason,
         preview: input.preview,
+        ...(input.command === undefined ? {} : { command: input.command }),
         requestedAt: now(),
       };
 
@@ -258,11 +309,20 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
 
     listPending: (runId) => approvals.listPendingByRun(scope, runId),
 
-    async decide(nodeRunId, kind, note) {
+    async decide(nodeRunId, kind, options = {}) {
       const request = await approvals.findPendingByNodeRun(scope, nodeRunId);
       if (request === null) throw new ApprovalNotFoundError(`Node run ${nodeRunId}`);
 
-      const decision = await store(request, kind, note);
+      let alwaysPrefix: string | undefined;
+      if (options.always === true) {
+        if (kind !== 'approve') {
+          throw new ApprovalAlwaysRefusedError('Always allow goes with an approve, not a reject.');
+        }
+        alwaysPrefix = request.command?.allowPrefix;
+        if (alwaysPrefix === undefined) throw new ApprovalAlwaysRefusedError();
+      }
+
+      const decision = await store(request, kind, options.note, alwaysPrefix);
       return { request, decision, nodeRun: await nodeRuns.get(scope, nodeRunId) };
     },
 
@@ -281,6 +341,9 @@ export function createApprovalService(deps: ApprovalServiceDeps): ApprovalServic
         }
       }
 
+      // [audit E-12] The run is ending: what it was for is no longer needed, and a run re-opened
+      // later learns it again with its next request.
+      workflowOfRun.delete(runId);
       return decisions;
     },
   };

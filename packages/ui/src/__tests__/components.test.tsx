@@ -2,9 +2,12 @@ import { render, screen } from '@testing-library/react';
 
 import { Badge } from '../components/badge.js';
 import { Button } from '../components/button.js';
+import { DIALOG_CLOSE_CLASS } from '../components/dialog.js';
 import { Input } from '../components/input.js';
 import { Label } from '../components/label.js';
+import { Select, SelectTrigger, SelectValue } from '../components/select.js';
 import { Tabs, TabsList, TabsTrigger } from '../components/tabs.js';
+import { Textarea } from '../components/textarea.js';
 import { cn } from '../lib/cn.js';
 import type { NodeCardProps, PortHandleProps } from '../types.js';
 
@@ -26,7 +29,7 @@ describe('shadcn base components', () => {
     const btn = screen.getByTestId('btn');
     expect(btn.tagName).toBe('BUTTON');
     expect(btn).toHaveTextContent('Delete');
-    expect(btn.className).toContain('text-[#c94c27]');
+    expect(btn.className).toContain('text-danger');
   });
 
   it('Button asChild renders the child element instead', () => {
@@ -80,6 +83,34 @@ describe('restyled primitives keep their roles and names', () => {
     );
     expect(screen.getByText('tag')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Name' })).toBeInTheDocument();
+  });
+});
+
+describe('audit U-6 the shared fields and the dialog close show keyboard focus', () => {
+  const RING = [
+    'focus-visible:border-[var(--focus)]',
+    'focus-visible:shadow-[0_0_0_1px_var(--focus)]',
+  ];
+
+  it('Input, Textarea and the Select trigger draw a 2px --focus ring', () => {
+    render(
+      <>
+        <Input aria-label="Name" />
+        <Textarea aria-label="Notes" />
+        <Select>
+          <SelectTrigger aria-label="Pick">
+            <SelectValue />
+          </SelectTrigger>
+        </Select>
+      </>,
+    );
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveClass(...RING);
+    expect(screen.getByRole('textbox', { name: 'Notes' })).toHaveClass(...RING);
+    expect(screen.getByRole('combobox', { name: 'Pick' })).toHaveClass(...RING);
+  });
+
+  it('a dialog’s close control does too', () => {
+    expect(DIALOG_CLOSE_CLASS.split(' ')).toEqual(expect.arrayContaining(RING));
   });
 });
 

@@ -1,4 +1,4 @@
-import type { CliPermission, CliProviderType, ProviderState, ProviderType } from '@ace/contracts';
+import type { CliPermission, CliProviderType, ProviderType } from '@ace/contracts';
 
 export { PROVIDER_STATE_LABEL } from '@ace/ui';
 
@@ -25,14 +25,6 @@ export const NEEDS_BASE_URL: ReadonlySet<ProviderType> = new Set<ProviderType>([
   'openai_compatible',
   'ollama',
 ]);
-
-/**
- * A provider's accent and a provider state's colour, as the theme's CSS variables (D328), so they
- * follow light and dark instead of fixing the dark theme's hex.
- */
-export const providerAccent = (type: ProviderType): string => `var(--color-provider-${type})`;
-export const providerStatusColor = (state: ProviderState): string =>
-  `var(--color-provider-status-${state})`;
 
 /**
  * D355 (PG-2.3): the presets a CLI provider is offered. D262's third, `full_auto`, bypassed every

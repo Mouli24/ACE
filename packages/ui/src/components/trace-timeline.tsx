@@ -79,7 +79,7 @@ function TraceRow({
     >
       <button
         type="button"
-        className="flex w-full min-w-0 cursor-pointer items-center gap-[10px] border-none bg-transparent px-3 py-[9px] text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f] disabled:cursor-default disabled:hover:bg-transparent"
+        className="flex w-full min-w-0 cursor-pointer items-center gap-[10px] border-none bg-transparent px-3 py-[9px] text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_var(--focus)] disabled:cursor-default disabled:hover:bg-transparent"
         aria-expanded={hasDetail ? open : undefined}
         aria-controls={hasDetail ? detailId : undefined}
         disabled={!hasDetail}

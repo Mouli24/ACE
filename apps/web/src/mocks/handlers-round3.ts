@@ -1,12 +1,16 @@
 import {
   APPROVAL_PREVIEW_MAX,
   ApprovalDecisionRequestSchema,
+  CONTINUABLE_HALT_REASONS,
   CreateGuardrailPolicyRequestSchema,
   PolicyTestRequestSchema,
   RetryRequestSchema,
   UpdateGuardrailPolicyRequestSchema,
   aceError,
+  agentWorkspaceOf,
   allowedRunActions,
+  canContinueRun,
+  interruptedNodeRuns,
   zeroUsage,
   type ApiError,
   type ApprovalDecision,
@@ -249,6 +253,7 @@ export function decideApproval(
   nodeRunId: string,
   decision: ApprovalDecision['decision'],
   note?: string,
+  always = false,
 ): DecisionOutcome {
   const nodeRun = db.getNodeRun(nodeRunId);
   if (nodeRun === undefined) return { ok: false, reason: 'node_run_not_found' };
@@ -264,6 +269,24 @@ export function decideApproval(
     decidedAt: now(),
   };
   db.resolveApproval(request.id);
+  // D376: Always allow saves the card's prefix on the node, as the engine does.
+  const prefix = request.command?.allowPrefix;
+  if (decision === 'approve' && always && prefix !== undefined && !request.command?.denylisted) {
+    const nodes = db.nodesOf(run.workflowId);
+    const saved = nodes.map((node) => {
+      if (node.id !== request.nodeId || node.kind !== 'agent') return node;
+      const workspace = agentWorkspaceOf(node.config);
+      if (workspace.allowedCommands.includes(prefix)) return node;
+      return {
+        ...node,
+        config: {
+          ...node.config,
+          workspace: { ...workspace, allowedCommands: [...workspace.allowedCommands, prefix] },
+        },
+      };
+    });
+    db.commitGraph(run.workflowId, saved, db.edgesOf(run.workflowId));
+  }
 
   const approvals = [...(nodeRun.approvals ?? []), stored];
   const decided: NodeRun =
@@ -497,6 +520,48 @@ export function createRound3Handlers(db: MockDb): HttpHandler[] {
       ),
     ),
 
+    /*
+     * D388: carry on a run that was cut off. The rule is the contract's `canContinueRun`, the one the
+     * engine enforces: HALTED by a crash, a shutdown or a Stop (else 409 `invalid_run_state`), with
+     * an interrupted latest attempt (else 409 `nothing_to_continue`). Each interrupted node runs
+     * again on the inputs it was given, its downstream after it — a node downstream of two of them
+     * once — and what completed is kept. Answers the reopened run.
+     */
+    http.post(
+      `${API}/runs/:id/continue`,
+      guard((ctx) => {
+        const run = db.getRun(param(ctx, 'id'));
+        if (run === undefined) return notFound('Run');
+        const rows = db.listNodeRuns(run.id);
+        if (!canContinueRun(run, rows)) {
+          return run.status === 'HALTED' &&
+            (CONTINUABLE_HALT_REASONS as readonly string[]).includes(run.haltReason ?? '')
+            ? error(409, 'workflow', 'nothing_to_continue', 'Nothing in this run was cut off.')
+            : invalidRunState(
+                `A ${run.status} run${run.haltReason === undefined ? '' : ` (${run.haltReason})`} cannot be continued.`,
+              );
+        }
+        const interrupted = interruptedNodeRuns(rows);
+        const again = new Set(interrupted.map((row) => row.nodeId));
+        const claimed = new Set<string>();
+        for (const previous of interrupted) {
+          const node = nodeOf(run, previous.nodeId);
+          if (node === undefined) continue;
+          const downstream = downstreamNodes(run, node.id).filter(
+            (each) => !again.has(each.id) && !claimed.has(each.id),
+          );
+          for (const each of downstream) claimed.add(each.id);
+          startAttempt(db, run, node, {
+            attempt: previous.attempt + 1,
+            iteration: previous.iteration,
+            reads: previous.inputEnvelopes.flatMap((envelope) => envelope.reads),
+            downstream,
+          });
+        }
+        return HttpResponse.json(db.getRun(run.id) ?? run);
+      }),
+    ),
+
     /* ------------------------------------------------- retry and re-run (§2.5, FR-ERR-003/004) */
     http.post(
       `${API}/node-runs/:id/retry`,
@@ -663,7 +728,13 @@ async function decide(
 ): Promise<Response> {
   const parsed = await body(ctx.request, ApprovalDecisionRequestSchema, {});
   if (!parsed.ok) return parsed.response;
-  const outcome = decideApproval(db, param(ctx, 'id'), decision, parsed.data.note);
+  const outcome = decideApproval(
+    db,
+    param(ctx, 'id'),
+    decision,
+    parsed.data.note,
+    parsed.data.always === true,
+  );
   if (outcome.ok) return HttpResponse.json(outcome.nodeRun);
   if (outcome.reason === 'no_pending_approval') {
     return invalidRunState('That approval has already been decided.');

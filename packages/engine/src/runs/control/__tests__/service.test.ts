@@ -745,3 +745,249 @@ describe('FR-OBS-002 a Stop announces the day totals (13a review m5)', () => {
     expect(h.logs.some((line) => line.includes('could not read the day totals'))).toBe(true);
   });
 });
+
+describe('D388 Continue an interrupted run (FR-ERR-003, FR-ERR-004)', () => {
+  /* Brief → A, Brief → B (in parallel) → Join → End. */
+  const a = agentNode('A');
+  const b = agentNode('B');
+  const join = agentNode('Join');
+  const end = outputNode('End');
+  const parallel = {
+    version: 4,
+    nodes: [brief, a, b, join, end],
+    edges: [edge(brief, a), edge(brief, b), edge(a, join), edge(b, join), edge(join, end)],
+  };
+  const cutOff = (overrides: Partial<Run> = {}): Run =>
+    makeRun({ snapshot: parallel, status: 'HALTED', haltReason: 'crash', ...overrides });
+  const restartedError = { kind: 'workflow' as const, message: 'restarted', retryable: true };
+  const upstreamError = { kind: 'workflow' as const, message: 'blocked', retryable: false };
+  const idleFrames = (h: Harness): string[] =>
+    h.bus
+      .typesOf('node.state')
+      .map((event) => event.payload as { nodeId: string; status: string })
+      .filter((payload) => payload.status === 'IDLE')
+      .map((payload) => payload.nodeId);
+
+  it('a crash with two parallel nodes cut off: two READY retries at attempt 2, one drive with both', async () => {
+    const run = cutOff();
+    const toA = makeEnvelope(run, brief.id, a.id, 'the brief for A');
+    const toB = makeEnvelope(run, brief.id, b.id, 'the brief for B');
+    const done = makeNodeRun(run, brief.id, { status: 'COMPLETED' });
+    const stoppedA = makeNodeRun(run, a.id, { status: 'STOPPED', inputEnvelopes: [toA] });
+    const stoppedB = makeNodeRun(run, b.id, {
+      status: 'STOPPED',
+      inputEnvelopes: [toB],
+      usage: { tokensIn: 4, tokensOut: 1, costUsd: 0.01 },
+    });
+    const h = harness({ runs: [run], nodeRuns: [done, stoppedA, stoppedB] });
+
+    const continued = await h.controls.continueRun(run.id);
+
+    expect(continued).toMatchObject({ id: run.id, status: 'RUNNING' });
+    expect(continued.allowedActions).toEqual(['pause', 'stop']);
+    expect(h.stores.runRows.get(run.id)?.status).toBe('RUNNING');
+
+    expect(h.partials).toHaveLength(1);
+    const plan = h.partials[0]!;
+    expect(plan.withDownstream).toBe(true);
+    expect(plan.run.status).toBe('RUNNING');
+    expect(plan.nodeRuns.map((row) => row.nodeId).sort()).toEqual([a.id, b.id].sort());
+    for (const retry of plan.nodeRuns) {
+      expect(retry).toMatchObject({ status: 'READY', attempt: 2, iteration: 1 });
+      expect(retry.usage).toEqual({ tokensIn: 0, tokensOut: 0, costUsd: 0 });
+      expect(retry.verdicts).toEqual([]);
+      expect(retry.toolCalls).toEqual([]);
+      expect(retry.approvals).toEqual([]);
+      expect(retry.error).toBeUndefined();
+      // Each in the store, exactly as handed to the drive.
+      expect(h.stores.nodeRunRows.get(retry.id)).toEqual(retry);
+    }
+    // FR-ERR-003: what the cut-off attempt was delivered, as delivered — never rebuilt.
+    const retryA = plan.nodeRuns.find((row) => row.nodeId === a.id);
+    expect(retryA?.inputEnvelopes.map((envelope) => envelope.reads)).toEqual([toA.reads]);
+    expect(h.envelopesAsked).toEqual([]);
+    // The cut-off rows are history, left as they were.
+    expect(h.stores.nodeRunRows.get(stoppedA.id)?.status).toBe('STOPPED');
+    expect(h.stores.nodeRunRows.get(stoppedB.id)?.usage.tokensIn).toBe(4);
+    expect(h.stores.nodeRunRows.get(done.id)?.status).toBe('COMPLETED');
+  });
+
+  it('a node that COMPLETED gets no retry, and only the latest attempt of a node counts', async () => {
+    const run = cutOff({ haltReason: 'stopped' });
+    const h = harness({
+      runs: [run],
+      nodeRuns: [
+        makeNodeRun(run, brief.id, { status: 'COMPLETED' }),
+        makeNodeRun(run, a.id, { status: 'COMPLETED' }),
+        // Stopped once, then finished on a retry: nothing left to continue for B.
+        makeNodeRun(run, b.id, { status: 'STOPPED', attempt: 1 }),
+        makeNodeRun(run, b.id, { status: 'COMPLETED', attempt: 2 }),
+        makeNodeRun(run, join.id, { status: 'STOPPED' }),
+      ],
+    });
+
+    await h.controls.continueRun(run.id);
+
+    expect(h.partials).toHaveLength(1);
+    expect(h.partials[0]?.nodeRuns.map((row) => [row.nodeId, row.attempt])).toEqual([[join.id, 2]]);
+    expect(h.stores.nodeRunRows.size).toBe(6);
+  });
+
+  it('an agentic node left BLOCKED by an engine restart (D379) is continued like a STOPPED one', async () => {
+    const run = cutOff();
+    const h = harness({
+      runs: [run],
+      nodeRuns: [
+        makeNodeRun(run, brief.id, { status: 'COMPLETED' }),
+        makeNodeRun(run, a.id, {
+          status: 'BLOCKED',
+          failureReason: 'BLOCKED',
+          error: { ...restartedError, code: 'engine_restarted' },
+        }),
+        makeNodeRun(run, b.id, {
+          status: 'BLOCKED',
+          failureReason: 'BLOCKED',
+          error: { ...restartedError, code: 'approval_lost' },
+        }),
+      ],
+    });
+
+    await h.controls.continueRun(run.id);
+
+    expect(h.partials[0]?.nodeRuns.map((row) => row.nodeId).sort()).toEqual([a.id, b.id].sort());
+    expect(h.partials[0]?.nodeRuns.every((row) => row.status === 'READY')).toBe(true);
+    // Its own BLOCKED row is not cleared: the retry is what runs.
+    expect(idleFrames(h)).toEqual([]);
+  });
+
+  it('a row BLOCKED by an upstream failure downstream of what continues is cleared to IDLE, not retried', async () => {
+    /* The parallel graph, plus Brief → Side → SideEnd off to one side. */
+    const side = agentNode('Side');
+    const sideEnd = outputNode('SideEnd');
+    const run = cutOff({
+      haltReason: 'stopped',
+      snapshot: {
+        version: 5,
+        nodes: [...parallel.nodes, side, sideEnd],
+        edges: [...parallel.edges, edge(brief, side), edge(side, sideEnd)],
+      },
+    });
+    const blockedJoin = makeNodeRun(run, join.id, {
+      status: 'BLOCKED',
+      failureReason: 'BLOCKED',
+      error: { ...upstreamError, code: 'upstream_failed' },
+    });
+    const blockedSideEnd = makeNodeRun(run, sideEnd.id, {
+      status: 'BLOCKED',
+      failureReason: 'BLOCKED',
+      error: { ...upstreamError, code: 'upstream_failed' },
+    });
+    const h = harness({
+      runs: [run],
+      nodeRuns: [
+        makeNodeRun(run, brief.id, { status: 'COMPLETED' }),
+        makeNodeRun(run, a.id, { status: 'FAILED', failureReason: 'RUN_FAILED' }),
+        makeNodeRun(run, b.id, { status: 'STOPPED' }),
+        makeNodeRun(run, side.id, { status: 'FAILED', failureReason: 'RUN_FAILED' }),
+        blockedJoin,
+        blockedSideEnd,
+      ],
+    });
+
+    await h.controls.continueRun(run.id);
+
+    // Only B was cut off; A failed, and a failure is a Retry, not a Continue.
+    expect(h.partials[0]?.nodeRuns.map((row) => row.nodeId)).toEqual([b.id]);
+    expect(h.stores.nodeRunRows.get(blockedJoin.id)?.status).toBe('IDLE');
+    // Nothing that continues reaches SideEnd: its block stands.
+    expect(h.stores.nodeRunRows.get(blockedSideEnd.id)?.status).toBe('BLOCKED');
+    expect(idleFrames(h)).toEqual([join.id]);
+  });
+
+  it.each(['crash', 'shutdown', 'stopped'] as const)(
+    'continues a run HALTED `%s`',
+    async (haltReason) => {
+      const run = cutOff({ haltReason });
+      const h = harness({ runs: [run], nodeRuns: [makeNodeRun(run, a.id, { status: 'STOPPED' })] });
+      await expect(h.controls.continueRun(run.id)).resolves.toMatchObject({ status: 'RUNNING' });
+      expect(h.partials).toHaveLength(1);
+    },
+  );
+
+  it.each(['failure', 'budget_exceeded'] as const)(
+    'refuses a run HALTED `%s` with 409 `invalid_run_state`, and writes nothing',
+    async (haltReason) => {
+      const run = cutOff({ haltReason });
+      const h = harness({ runs: [run], nodeRuns: [makeNodeRun(run, a.id, { status: 'STOPPED' })] });
+
+      const refused = h.controls.continueRun(run.id);
+      await expect(refused).rejects.toMatchObject({
+        status: 409,
+        code: 'invalid_run_state',
+        details: { runId: run.id, status: 'HALTED', haltReason, allowedActions: ['restart'] },
+      });
+      expect(h.partials).toEqual([]);
+      expect(h.stores.nodeRunRows.size).toBe(1);
+      expect(h.stores.runPatches).toEqual([]);
+    },
+  );
+
+  it.each(['RUNNING', 'PAUSED', 'COMPLETE', 'BLOCKED'] as const)(
+    'refuses a run that is %s with 409 `invalid_run_state`',
+    async (status) => {
+      const run = makeRun({ snapshot: parallel, status });
+      const h = harness({ runs: [run], nodeRuns: [makeNodeRun(run, a.id, { status: 'STOPPED' })] });
+
+      await expect(h.controls.continueRun(run.id)).rejects.toMatchObject({
+        status: 409,
+        code: 'invalid_run_state',
+        details: { status },
+      });
+      expect(h.partials).toEqual([]);
+      expect(h.stores.runRows.get(run.id)?.status).toBe(status);
+    },
+  );
+
+  it('refuses a run HALTED `stopped` with nothing cut off: 409 `nothing_to_continue`', async () => {
+    const run = cutOff({ haltReason: 'stopped' });
+    const h = harness({
+      runs: [run],
+      nodeRuns: [
+        makeNodeRun(run, brief.id, { status: 'COMPLETED' }),
+        makeNodeRun(run, a.id, { status: 'FAILED', failureReason: 'RUN_FAILED' }),
+      ],
+    });
+
+    await expect(h.controls.continueRun(run.id)).rejects.toMatchObject({
+      status: 409,
+      code: 'nothing_to_continue',
+      message: 'Nothing in this run was cut off — retry a failed node or restart the run.',
+    });
+    expect(h.partials).toEqual([]);
+    expect(h.stores.runRows.get(run.id)?.status).toBe('HALTED');
+  });
+
+  it('answers 404 for a run that does not exist', async () => {
+    const h = harness();
+    await expect(h.controls.continueRun('01JBXQ8Z9KQ4R7N2VWXYZ0NONE')).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it('a Domain run that was stopped carries on too, with its own controls (D323)', async () => {
+    const domain = {
+      routing: 'supervised' as const,
+      loopGuardLimit: 3,
+      tokenBudget: null,
+      stayOpen: true,
+    };
+    const run = cutOff({ haltReason: 'stopped', domain });
+    const h = harness({ runs: [run], nodeRuns: [makeNodeRun(run, a.id, { status: 'STOPPED' })] });
+
+    const continued = await h.controls.continueRun(run.id);
+
+    expect(continued.status).toBe('RUNNING');
+    expect(continued.allowedActions).toContain('end');
+    expect(h.partials[0]?.run.domain).toEqual(domain);
+  });
+});

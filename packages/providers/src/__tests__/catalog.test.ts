@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   MANIFEST,
   MANIFEST_PRICE_TABLE_VERSION,
+  NOT_OFFERED_REASON,
   manifestFor,
   mergeCatalog,
+  type ManifestModel,
 } from '../catalog/index.js';
-import { discoveredModel } from '../adapters/ai-sdk.js';
+import { NOT_A_CHAT_MODEL, discoveredModel, notAChatModel } from '../adapters/ai-sdk.js';
 
 describe('FR-MOD-002 the versioned manifest describes what discovery cannot', () => {
   it('covers the three cloud providers', () => {
@@ -111,5 +113,51 @@ describe('TC-MOD-001 / TC-MOD-002 discovery and manifest merge into one catalog'
 
   it('is what TC-MOD-002 asserts: a provider with no listing still has models', () => {
     expect(mergeCatalog([], manifestFor('openai')).length).toBeGreaterThan(0);
+  });
+});
+
+describe('audit P-5 a listing says what this key may use', () => {
+  const manifest = manifestFor('anthropic');
+  const [first, second] = manifest as [ManifestModel, ManifestModel];
+
+  it('marks a manifest model the listing left out unavailable, with why', () => {
+    const merged = mergeCatalog([discoveredModel(first.modelId)], manifest);
+    const missing = merged.find((model) => model.modelId === second.modelId);
+
+    expect(merged.find((model) => model.modelId === first.modelId)?.available).toBeUndefined();
+    expect(missing).toMatchObject({
+      source: 'manifest',
+      available: false,
+      unavailableReason: NOT_OFFERED_REASON,
+    });
+  });
+
+  it('counts a dated snapshot as offering the model it dates', () => {
+    const merged = mergeCatalog(
+      [discoveredModel(`${first.modelId}-20250929`), discoveredModel('gpt-5-2025-08-07')],
+      [...manifest, ...manifestFor('openai')],
+    );
+
+    expect(merged.find((model) => model.modelId === first.modelId)?.available).toBeUndefined();
+    expect(merged.find((model) => model.modelId === 'gpt-5')?.available).toBeUndefined();
+    expect(merged.find((model) => model.modelId === 'gpt-5-mini')?.available).toBe(false);
+  });
+
+  it('audit P-6 keeps the listing’s verdict on a model the manifest also describes', () => {
+    const merged = mergeCatalog(
+      [notAChatModel(discoveredModel('text-embedding-3-small'))],
+      manifestFor('openai'),
+    );
+
+    expect(merged.find((model) => model.modelId === 'text-embedding-3-small')).toMatchObject({
+      source: 'discovered',
+      available: false,
+      unavailableReason: NOT_A_CHAT_MODEL,
+      pricing: { inputPer1k: 0.00002 },
+    });
+  });
+
+  it('offers the whole manifest when nothing was listed, as before', () => {
+    expect(mergeCatalog([], manifest).every((model) => model.available === undefined)).toBe(true);
   });
 });

@@ -35,11 +35,9 @@ export interface BackgroundSnapshot {
 
 /** The run's background commands. A run's end, a cancel or engine shutdown calls `killAll`. */
 export interface BackgroundProcesses {
-  start(spec: {
-    readonly nodeId: string;
-    readonly command: string;
-    readonly cwd: string;
-  }): { readonly processId: string };
+  start(spec: { readonly nodeId: string; readonly command: string; readonly cwd: string }): {
+    readonly processId: string;
+  };
   output(processId: string): BackgroundSnapshot | undefined;
   kill(processId: string): Promise<boolean>;
   killAll(): Promise<void>;
@@ -63,6 +61,8 @@ export interface AgentCommandObserver {
     /** Absolute: the folder the command runs in. */
     readonly cwd: string;
     readonly background: boolean;
+    /** A background command's id in the session (`kill_command`), so Forge's Kill can reach it. */
+    readonly processId?: string;
   }): AgentCommandWatch;
 }
 

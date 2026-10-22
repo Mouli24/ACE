@@ -15,8 +15,9 @@ import {
 import { Hono } from 'hono';
 
 import { createApprovalService, type ApprovalService } from '../approvals/index.js';
+import { createGraphService, type GraphService } from '../graph/index.js';
 import { createApprovalRoutes } from '../approvals/routes.js';
-import { createEventBus } from '../events/index.js';
+import { createEventBus, workflowUpdatedEvent } from '../events/index.js';
 import { toApiError } from '../gateway/errors.js';
 import {
   createGuardrailEvaluator,
@@ -39,9 +40,11 @@ import {
 import { createSemaphore } from '../providers/semaphore.js';
 import {
   controlStoresFor,
+  createAlwaysAllow,
   createRunControls,
   createRunGateRegistry,
   createRunService,
+  type CommandClassifier,
   type ExecutableTool,
   type RunControls,
   type RunService,
@@ -63,6 +66,10 @@ import { InProcessPubSubStub } from './pubsub-stub.js';
  * - **Writer** answers with an email address, which the output point's `pii → ask_user` holds.
  * - **Cleaner** asks for `sandbox_delete { path: 'notes.txt' }` on its first turn — the tool point's
  *   approval — and answers "Deleted." once it has the tool's result.
+ * - **Builder** (D376) is an agentic node (`edit_commands`) that asks for `run_command { command:
+ *   'npm run build' }` on its first two turns and answers "Built." after the second result.
+ *   **Prober** is the same with `echo $(whoami)`, once. Commands are classified by
+ *   `options.classify` — the engine cannot import `@ace/tools`' real one (CLAUDE.md §3.4 rule 3).
  * - anyone else answers "Done.".
  * A name in `holds` keeps its first call's stream open until that promise settles or the call's
  * signal aborts, so a test can make a node hold its provider slot.
@@ -159,8 +166,16 @@ export interface ApprovalRunHarness {
   holds: Map<string, Promise<void>>;
   /** Every path `sandbox_delete` was asked to delete — i.e. actually ran with. */
   deleted: string[];
+  /** D376: every command `run_command` actually ran. */
+  ran: string[];
+  /** D376: the graph service the server's Always allow saves through. */
+  graph: GraphService;
   /** POST /node-runs/:id/approve or /reject through the real routes. */
-  decide: (nodeRunId: string, kind: 'approve' | 'reject') => Promise<Response>;
+  decide: (
+    nodeRunId: string,
+    kind: 'approve' | 'reject',
+    body?: { note?: string; always?: boolean },
+  ) => Promise<Response>;
   /**
    * Brief → each named agent → its own Result. The agents are returned in the order given, which is
    * also their dispatch order (ids are monotonic and the snapshot is sorted by id). `timeoutMs` is
@@ -178,7 +193,7 @@ export interface ApprovalRunHarness {
 }
 
 export async function createApprovalRunHarness(
-  options: { providerConcurrency?: number } = {},
+  options: { providerConcurrency?: number; classify?: CommandClassifier } = {},
 ): Promise<ApprovalRunHarness> {
   const concurrency = options.providerConcurrency ?? 4;
   const repository = new FakeRepository();
@@ -247,6 +262,12 @@ export async function createApprovalRunHarness(
       callCounts.set(name, call);
       if (signal.aborted) abortedCalls.set(name, (abortedCalls.get(name) ?? 0) + 1);
       const firstTurn = (request.toolResults ?? []).length === 0;
+      const results = (request.toolResults ?? []).length;
+      const commandFor: Record<string, { command: string; times: number }> = {
+        Builder: { command: 'npm run build', times: 2 },
+        Prober: { command: 'echo $(whoami)', times: 1 },
+      };
+      const asks = commandFor[name];
       const hold = call === 1 ? holds.get(name) : undefined;
 
       return (async function* (): AsyncGenerator<StreamChunk> {
@@ -256,6 +277,17 @@ export async function createApprovalRunHarness(
           if (hold !== undefined) await holdOrAbort(hold, signal);
           else await Promise.resolve();
           if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+          if (asks !== undefined && results < asks.times) {
+            yield { type: 'usage', tokensIn: 5, tokensOut: 1 };
+            yield {
+              type: 'tool_call',
+              callId: `call-${results + 1}`,
+              name: 'run_command',
+              args: { command: asks.command },
+            };
+            yield { type: 'finish', reason: 'tool_calls' };
+            return;
+          }
           if (name === 'Cleaner' && firstTurn) {
             yield { type: 'usage', tokensIn: 5, tokensOut: 1 };
             yield {
@@ -272,7 +304,9 @@ export async function createApprovalRunHarness(
               ? 'Reach me at jane@example.com.'
               : name === 'Cleaner'
                 ? 'Deleted.'
-                : 'Done.';
+                : name === 'Builder'
+                  ? 'Built.'
+                  : 'Done.';
           yield { type: 'text', delta: text };
           yield { type: 'usage', tokensIn: 7, tokensOut: 3 };
           yield { type: 'finish', reason: 'stop' };
@@ -290,6 +324,29 @@ export async function createApprovalRunHarness(
       const path = (args as { path?: unknown }).path;
       deleted.push(typeof path === 'string' ? path : String(path));
       return { deleted: true };
+    },
+  };
+
+  /** D376: a recording `run_command`, destructive like the real one. */
+  const ran: string[] = [];
+  const runCommand: ExecutableTool = {
+    definition: {
+      name: 'run_command',
+      description: 'Runs a shell command in the project folder.',
+      inputSchema: {
+        type: 'object',
+        properties: { command: { type: 'string' } },
+        required: ['command'],
+      },
+      outputSchema: { type: 'object' },
+      permissions: { network: true, fsPaths: ['<project>'], destructive: true },
+      timeoutMs: 5_000,
+      source: 'builtin',
+    },
+    run: async (args) => {
+      const command = (args as { command?: unknown }).command;
+      ran.push(typeof command === 'string' ? command : String(command));
+      return { exitCode: 0, stdout: 'ok' };
     },
   };
 
@@ -324,11 +381,29 @@ export async function createApprovalRunHarness(
       },
     });
   };
+  const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
+  const graph = createGraphService({
+    repository,
+    scope,
+    logger,
+    onWorkflowUpdated: async (id, version) => {
+      await bus.emit(workflowUpdatedEvent(id, version));
+    },
+  });
+  /* D376: the server's `onAlways` — the live run's allowlist, then the saved workflow's node. */
+  const alwaysAllow = createAlwaysAllow({
+    allowlistFor: (runId) => service.allowlistFor(runId),
+    workflowOf: async (runId) => (await repository.runs.get(scope, runId))?.workflowId,
+    graph,
+    logger,
+  });
   const approvals = createApprovalService({
     scope,
     approvals: guardrailStore.approvals,
     nodeRuns: guardrailStore.nodeRuns,
     bus,
+    onAlways: (runId, nodeId, prefix) => alwaysAllow(runId, nodeId, prefix),
+    logger,
     onWaiting: async (request) => {
       const row = await repository.nodeRuns.update(scope, request.nodeRunId, { status: 'WAITING' });
       await emitNodeState(request.runId, row, 'WAITING');
@@ -364,7 +439,6 @@ export async function createApprovalRunHarness(
 
   const semaphore = createSemaphore(concurrency);
   const gates = createRunGateRegistry();
-  const logger = createLogger({ level: 'silent', destination: { write: () => undefined } });
   const service = createRunService({
     gates,
     repository,
@@ -378,7 +452,11 @@ export async function createApprovalRunHarness(
     policies,
     guardrails,
     approvals,
-    tools: { get: (name) => (name === 'sandbox_delete' ? sandboxDelete : undefined) },
+    tools: {
+      get: (name) =>
+        name === 'sandbox_delete' ? sandboxDelete : name === 'run_command' ? runCommand : undefined,
+    },
+    ...(options.classify === undefined ? {} : { classifyCommand: options.classify }),
     sandboxDirFor: (runId) => `/tmp/ace/sandbox/${runId}`,
     toolGuardrails,
     tokenBatchMs: 0,
@@ -437,6 +515,12 @@ export async function createApprovalRunHarness(
         ...(name === 'Cleaner'
           ? { tools: { enabled: ['sandbox_delete'], maxToolCalls: 10, allowedDomains: [] } }
           : {}),
+        ...(name === 'Builder' || name === 'Prober'
+          ? {
+              tools: { enabled: ['run_command'], maxToolCalls: 10, allowedDomains: [] },
+              workspace: { access: 'edit_commands', maxTurns: 50, allowedCommands: [] },
+            }
+          : {}),
       }),
     };
   };
@@ -484,10 +568,12 @@ export async function createApprovalRunHarness(
     maxConcurrentCalls: () => maxOpen,
     holds,
     deleted,
-    decide: async (nodeRunId, kind) =>
+    ran,
+    graph,
+    decide: async (nodeRunId, kind, body = { note: 'decided in a test' }) =>
       app.request(`http://127.0.0.1:4747${API_BASE_PATH}/node-runs/${nodeRunId}/${kind}`, {
         method: 'POST',
-        body: JSON.stringify({ note: 'decided in a test' }),
+        body: JSON.stringify(body),
         headers: { 'content-type': 'application/json' },
       }),
 

@@ -88,6 +88,8 @@ function toApprovalRequest(row: ApprovalRow): RunApprovalRequest {
     checkType: row.checkType,
     reason: row.reason,
     preview: row.preview,
+    // D376: an agentic node's command; NULL on every other request.
+    ...(row.command === null ? {} : { command: JSON.parse(row.command) }),
     requestedAt: row.requestedAt,
   });
   return { ...parsed, runId: row.runId, nodeRunId: row.nodeRunId };
@@ -103,6 +105,8 @@ function toStoredApproval(row: ApprovalRow): StoredApproval {
       requestId: row.id,
       decision: row.decision,
       ...(row.note === null ? {} : { note: row.note }),
+      ...(row.always === true ? { always: true } : {}),
+      ...(row.prefix === null ? {} : { prefix: row.prefix }),
       decidedAt: row.decidedAt,
     }),
   };
@@ -475,9 +479,14 @@ export function createApprovalRepository(db: Db, inTransaction: InTransaction): 
           checkType: request.checkType,
           reason: request.reason,
           preview: request.preview,
+          // D376: guarded like the preview — the evaluator has already masked it (BR-07).
+          command:
+            request.command === undefined ? null : toJsonColumn(request.command, `${at}.command`),
           requestedAt: request.requestedAt,
           decision: null,
           note: null,
+          always: null,
+          prefix: null,
           decidedAt: null,
         })
         .run();
@@ -530,11 +539,16 @@ export function createApprovalRepository(db: Db, inTransaction: InTransaction): 
         if (decision.note !== undefined) {
           assertNoSecrets(decision.note, `approval(${decision.requestId}).note`);
         }
+        if (decision.prefix !== undefined) {
+          assertNoSecrets(decision.prefix, `approval(${decision.requestId}).prefix`);
+        }
 
         db.update(approvals)
           .set({
             decision: decision.decision,
             note: decision.note ?? null,
+            always: decision.always ?? null,
+            prefix: decision.prefix ?? null,
             decidedAt: decision.decidedAt,
           })
           .where(

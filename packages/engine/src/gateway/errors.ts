@@ -54,6 +54,15 @@ export const forbiddenOrigin = (origin: string): HttpError =>
     origin,
   });
 
+/**
+ * [audit S-7] A `Host` that is not one of the engine's own addresses — what a DNS-rebound page
+ * sends. The same refusal as a foreign Origin, because that is what it is.
+ */
+export const forbiddenHost = (host: string): HttpError =>
+  new HttpError('auth', 'forbidden_origin', `Host "${host}" is not this engine's address.`, {
+    host,
+  });
+
 export const notFound = (what: string): HttpError =>
   new HttpError('workflow', 'not_found', `${what} was not found.`);
 

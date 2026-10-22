@@ -1,7 +1,7 @@
 import css from '../theme.css?raw';
 import { DATA_TYPES } from '@ace/contracts';
 
-import { INK_COLORS, PORT_COLORS, THEME_COLORS } from '../tokens.js';
+import { INK_COLORS, PORT_COLORS, THEME_COLORS, contrastRatio } from '../tokens.js';
 
 const block = (selector: RegExp): string => {
   const start = css.search(selector);
@@ -54,11 +54,26 @@ describe('D328 theme.css mirrors tokens.ts through the theme variables', () => {
     },
   );
 
-  it('danger and selection are the theme hexes in both themes', () => {
-    expect(kit).toContain(`--color-danger: ${THEME_COLORS.light.danger};`);
+  it('danger is the AA danger ink (audit U-5); selection is the theme hex in both themes', () => {
+    // --danger-ink mirrors INK_COLORS in both themes (below); #c94c27 stays as decoration only
+    expect(kit).toContain('--color-danger: var(--danger-ink);');
     expect(kit).toContain(`--color-selection: ${THEME_COLORS.light.selection};`);
-    expect(THEME_COLORS.dark.danger).toBe(THEME_COLORS.light.danger);
     expect(THEME_COLORS.dark.selection).toBe(THEME_COLORS.light.selection);
+  });
+
+  it('audit U-6 --focus is the AA ring colour of each theme, behind --color-focus', () => {
+    expect(kit).toContain('--color-focus: var(--focus);');
+    expect(varValue(light, 'focus')).toBe(INK_COLORS.light.accentStrong);
+    expect(varValue(dark, 'focus')).toBe('#ef6b3f');
+    // WCAG 1.4.11: a focus indicator is >= 3:1 against what it sits on
+    for (const theme of ['light', 'dark'] as const) {
+      const focus = varValue(theme === 'light' ? light : dark, 'focus');
+      for (const surface of ['canvas', 'card', 'panel'] as const) {
+        expect(contrastRatio(focus, THEME_COLORS[theme][surface] as string)).toBeGreaterThanOrEqual(
+          3,
+        );
+      }
+    }
   });
 
   it('emits every variable, including the ones only built at runtime', () => {
@@ -153,6 +168,13 @@ describe('D332 the Canvas block', () => {
     expect(css).toMatch(/ {2}a \{\n {4}color: var\(--accent-ink\);/);
   });
 
+  it('audit U-18 the page behind the app is the theme’s canvas, light or dark', () => {
+    expect(css).toMatch(/ {2}html,\n {2}body \{\n {4}background-color: var\(--canvas\);/);
+    expect(css).toMatch(
+      /:root\[data-theme='dark'\] body:has\(\[data-surface='home'\]\) \{\n {4}background-color: #151413;/,
+    );
+  });
+
   it.each(DATA_TYPES)('PG-1.1 --port-%s mirrors PORT_COLORS in both themes', (type) => {
     const light = block(/^:root \{/m);
     const dark = block(/^:root\[data-theme='dark'\] \{/m);
@@ -164,6 +186,13 @@ describe('D332 the Canvas block', () => {
     expect(block(/^\.ace-edge-flow \{/m)).toContain('animation: flow 1.2s linear infinite;');
     const reduced = css.slice(css.search(/@media \(prefers-reduced-motion: reduce\)/));
     expect(reduced).toContain('.ace-edge-flow');
+  });
+
+  it('audit U-12 reduced motion stops every looping animation, not only the three classes', () => {
+    const reduced = css.slice(css.search(/@media \(prefers-reduced-motion: reduce\)/));
+    expect(reduced).toMatch(/ {2}\*,\n {2}\*::before,\n {2}\*::after \{/);
+    expect(reduced).toContain('animation-iteration-count: 1 !important;');
+    expect(reduced).toContain('animation-duration: 0.01ms !important;');
   });
 
   it('the loading placeholder is the canvas with the theme’s dot grid at zoom 1', () => {

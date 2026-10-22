@@ -134,7 +134,8 @@ import {
   type ConnectFrom,
   type PortConnectState,
 } from './interactions/ports';
-import { useGraphEditor } from './interactions/use-graph-editor';
+import { useHistoryStore } from './interactions/history';
+import { useGraphEditor, useHistoryDepth } from './interactions/use-graph-editor';
 import { autoLayout } from './layout/auto-layout';
 import { freeSlotNear } from './placement';
 import { GHOST_EDGE_CLASS, runSnapshotOverlay } from './run-snapshot';
@@ -189,7 +190,9 @@ export function Canvas({ workflowId, readOnly = false }: CanvasProps) {
   }
 
   return (
-    <ReactFlowProvider>
+    // [audit W-17] one React Flow store per workflow: the viewport, measured nodes and selection of
+    // the workflow just left never carry into the next one opened in the same Canvas
+    <ReactFlowProvider key={workflowId}>
       <NodeEstimateContext.Provider value={estimates}>
         <CanvasInner
           workflowId={workflowId}
@@ -427,7 +430,7 @@ function CanvasBreadcrumb({ workflowId }: { workflowId: string }) {
     >
       <Link
         to="/projects"
-        className="flex h-[24px] items-center rounded-full px-[10px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        className="flex h-[24px] items-center rounded-full px-[10px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       >
         HOME
       </Link>
@@ -977,11 +980,11 @@ function CanvasInner({
   );
 
   /*
-   * The loop chip's numbers (FR-PAR-005). `revision` is what moves when a frame lands, and a loop
-   * iteration is a handful of frames per run — so reading it here costs one extra edge rebuild per
-   * iteration, not one per token.
+   * The loop chip's numbers (FR-PAR-005). [audit W-4] `edgeRevision` moves only on the frames that
+   * change an edge (`node.state`, `loop.iteration`, `edge.transfer`) — a handful per run — so the
+   * whole Canvas no longer re-renders on every streamed token, as it did keyed on `revision`.
    */
-  const runRevision = useRunStore((store) => store.revision);
+  const runRevision = useRunStore((store) => store.edgeRevision);
   // PG-4.2: a paused run, or one held on a WAITING node, is still live — not idle.
   const runIsLive = useRunStore(
     (store) =>
@@ -1041,6 +1044,33 @@ function CanvasInner({
     [setSelection],
   );
 
+  /** [audit W-6] Whether this workflow's history has a step back / forward, for the toolbar. */
+  const { canUndo, canRedo } = useHistoryDepth(workflowId);
+
+  /**
+   * [audit W-6] A delete asks nothing first, so it says what went and offers Undo — of that
+   * delete only: once something else has been done since, the toolbar's Undo is the way back.
+   */
+  const announceUndoable = useCallback(
+    (message: string) => {
+      const entry = useHistoryStore.getState().byWorkflow[workflowId]?.past.at(-1);
+      if (entry === undefined) return;
+      toast(message, {
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            if (useHistoryStore.getState().byWorkflow[workflowId]?.past.at(-1) === entry) {
+              editor.undo();
+            } else {
+              toast.warning('Not undone — the workflow changed since. Use Undo in the toolbar.');
+            }
+          },
+        },
+      });
+    },
+    [workflowId, editor],
+  );
+
   /**
    * One deletion = one batch = one undo step (FR-CAN-009). Edges attached to a deleted node go with
    * it (the engine drops them), so only the other selected edges need their own `delete_edge`.
@@ -1070,8 +1100,17 @@ function CanvasInner({
             ? 'Delete node'
             : `Delete ${nodeIds.length} nodes`;
       editor.edit(ops, label);
+      announceUndoable(
+        nodeIds.length === 0
+          ? edgeIds.length === 1
+            ? 'Connection deleted'
+            : 'Connections deleted'
+          : nodeIds.length === 1
+            ? 'Node deleted'
+            : `${nodeIds.length} nodes deleted`,
+      );
     },
-    [editor, nodes, edges, readOnly],
+    [editor, nodes, edges, readOnly, announceUndoable],
   );
 
   /** D333: remove one node and join its incoming edges to its outgoing ones, one undo step. */
@@ -1079,9 +1118,11 @@ function CanvasInner({
     (nodeId: string) => {
       if (readOnly) return;
       const ops = removeReconnectingOps(nodes, edges, nodeId, workflowId);
-      if (ops.length > 0) editor.edit(ops, 'Remove node');
+      if (ops.length === 0) return;
+      editor.edit(ops, 'Remove node');
+      announceUndoable('Node removed');
     },
-    [readOnly, nodes, edges, workflowId, editor],
+    [readOnly, nodes, edges, workflowId, editor, announceUndoable],
   );
 
   /* ------------------------------------------- editing an edge in place (FR-CON-001/004/006) */
@@ -1680,16 +1721,15 @@ function CanvasInner({
       runAfter: (nodeId) => {
         if (!readOnly) setRunAfterNodeId(nodeId);
       },
-      runFromHere: (nodeId) =>
-        startRunMutate(
-          { startFromNodeId: nodeId },
-          {
-            onError: (error) =>
-              toast.error('Could not start the run', { description: error.message }),
-          },
-        ),
+      // [audit W-1] a refused start says why and puts the run on screen back (useStartRun);
+      // [audit W-8] the menu holds it back while a run is going, and so does this
+      runFromHere: (nodeId) => {
+        const store = useRunStore.getState();
+        if (store.workflowId === workflowId && store.active) return;
+        startRunMutate({ startFromNodeId: nodeId });
+      },
     }),
-    [readOnly, setSelection, duplicateNodesById, deleteElements, startRunMutate],
+    [readOnly, setSelection, duplicateNodesById, deleteElements, startRunMutate, workflowId],
   );
 
   // Expose to the settings modal, the sheet and the workspace menu (outside the flow).
@@ -1706,6 +1746,7 @@ function CanvasInner({
         undo,
         redo,
         readOnly,
+        focusNode,
       }),
     [
       register,
@@ -1718,6 +1759,7 @@ function CanvasInner({
       undo,
       redo,
       readOnly,
+      focusNode,
     ],
   );
 
@@ -2038,7 +2080,7 @@ function CanvasInner({
                   title="Who runs when"
                   onClick={() => setRunOrderOpen((open) => !open)}
                   className={cn(
-                    'absolute top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-full border bg-[var(--surface)] px-[14px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] focus-visible:border-[#ef6b3f]',
+                    'absolute top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-full border bg-[var(--surface)] px-[14px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] focus-visible:border-[var(--focus)]',
                     readOnly ? 'right-[16px]' : 'right-[136px]',
                     runOrderOpen ? 'border-[#ef6b3f]' : 'border-[var(--line)]',
                   )}
@@ -2066,7 +2108,7 @@ function CanvasInner({
                     data-testid="new-node-button"
                     title="Add an agent node"
                     onClick={addStage}
-                    className="absolute right-[16px] top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--surface)] py-0 pl-[6px] pr-[16px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] hover:shadow-[0_12px_30px_-12px_rgba(239,107,63,0.45)] focus-visible:border-[#ef6b3f]"
+                    className="absolute right-[16px] top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--surface)] py-0 pl-[6px] pr-[16px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] hover:shadow-[0_12px_30px_-12px_rgba(239,107,63,0.45)] focus-visible:border-[var(--focus)]"
                   >
                     <span
                       aria-hidden
@@ -2083,6 +2125,11 @@ function CanvasInner({
                   locked={locked}
                   hand={hand}
                   canUndoMove={canUndoMove}
+                  canUndo={canUndo}
+                  canRedo={canRedo}
+                  mod={MOD}
+                  onUndo={undo}
+                  onRedo={redo}
                   onZoomIn={() => zoomBy(() => ZOOM_STEP)}
                   onZoomOut={() => zoomBy(() => 1 / ZOOM_STEP)}
                   onResetZoom={() => zoomBy((zoom) => 1 / zoom)}
@@ -2391,7 +2438,7 @@ function EdgeMenuItems({
         <button
           type="button"
           role="menuitem"
-          className={cn(EDGE_MENU_ITEM, 'text-[#c94c27]')}
+          className={cn(EDGE_MENU_ITEM, 'text-danger')}
           onClick={onDelete}
         >
           Delete connection

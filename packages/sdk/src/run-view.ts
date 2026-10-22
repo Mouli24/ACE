@@ -4,6 +4,7 @@ import {
   isPersistedFrame,
   zeroUsage,
   type ApprovalRequest,
+  type BlockedReason,
   type BudgetHalt,
   type FailureReason,
   type HaltReason,
@@ -36,6 +37,18 @@ export interface NodeRunView {
   modelUsed?: ModelUsed;
   output?: Part[];
   usage: Usage;
+  /** D381: the tool call in flight, from its `tool.started` to the `tool.call` that ends it. */
+  activeTool?: ActiveToolView;
+}
+
+/** A tool call an agentic node has started and not yet finished (D381). */
+export interface ActiveToolView {
+  callId: string;
+  name: string;
+  /** The path or command it works on, when the frame named one. */
+  target?: string;
+  /** When the frame arrived, epoch ms. */
+  startedAt: number;
 }
 
 export interface EdgeTransferView {
@@ -66,10 +79,23 @@ export interface RunView {
   pausedAt: string | undefined;
   /**
    * The controls this run state accepts, undefined before the first frame names a status. No run
-   * event carries `allowedActions`, so this is `allowedRunActions(status)` — the same table the
-   * engine writes into `Run.allowedActions` and the web mocks call (FR-CTL-006, D71, D76).
+   * event carries `allowedActions`, so this is `allowedRunActions(status, context)` — the same table
+   * the engine writes into `Run.allowedActions` and the web mocks call (FR-CTL-006, D71, D76) — with
+   * the block's reason (D305) and whether the run stays open (D323) as its context.
    */
   allowedActions: RunAction[] | undefined;
+  /**
+   * D305: why the run is BLOCKED mid-run, from `run.blocked` until `run.resumed` or its end. Absent
+   * for a run blocked at pre-flight, which has no reason and can only restart.
+   */
+  blockedReason: BlockedReason | undefined;
+  /** D305: the engine's words for the block, from the same frame. */
+  blockedDetail: string | undefined;
+  /**
+   * D323: a run started from Domain whose graph has nothing left to do — open, idle, costing
+   * nothing. Set by `run.parked`, cleared when a node starts working again or the run ends.
+   */
+  parked: boolean;
   /** The approval requests still waiting for a decision, oldest first (FR-GRD-013). */
   approvals(): ApprovalRequest[];
   /** Every guardrail verdict seen for one node run, in arrival order (FR-GRD-015). */
@@ -107,6 +133,7 @@ function isPersistedRunEvent(frame: ServerFrame): frame is PersistedRunEvent {
 
 /** A node the run has not touched yet is IDLE (Arch §19.1), so the Canvas can render immediately. */
 const DEFAULT_STATE: NodeState = 'IDLE';
+/** States a node run does not leave (Arch §19.1); a tool call cannot still be in flight there. */const TERMINAL_STATES: ReadonlySet<NodeState> = new Set<NodeState>([  'COMPLETED',  'FAILED',  'STOPPED',  'BLOCKED',]);
 
 /**
  * Folds the run events of §2.4 into something a screen can render, and does it idempotently: the
@@ -128,6 +155,11 @@ export class RunEventBuffer {
   private totals: Usage = zeroUsage();
   private finalOutput: Record<Id, Part[]> | undefined;
   private pausedAt: string | undefined;
+  /** [audit W-5] D305's mid-run block, and D323's stay-open run — the context of `allowedActions`. */
+  private blockedReason: BlockedReason | undefined;
+  private blockedDetail: string | undefined;
+  private stayOpen = false;
+  private parked = false;
   private lastSeq = -1;
   private readonly seen = new Set<number>();
   private readonly byNodeRunId = new Map<Id, NodeRunView>();
@@ -192,6 +224,10 @@ export class RunEventBuffer {
         this.finalOutput = frame.payload.finalOutput;
         // A run that ended is no longer paused, including one stopped while PAUSED (D76).
         this.pausedAt = undefined;
+        // …nor blocked mid-run or parked (D305, D323): an ended run's BLOCKED is pre-flight's.
+        this.blockedReason = undefined;
+        this.blockedDetail = undefined;
+        this.parked = false;
         return;
       }
 
@@ -201,6 +237,9 @@ export class RunEventBuffer {
         view.iteration = frame.payload.iteration;
         view.attempt = frame.payload.attempt;
         view.status = frame.payload.status;
+        if (TERMINAL_STATES.has(frame.payload.status)) delete view.activeTool;
+        // D323: a node starting work in a parked run un-parks it; `run.parked` says when it parks again.
+        if (!TERMINAL_STATES.has(frame.payload.status)) this.parked = false;
         if (frame.payload.failureReason !== undefined)
           view.failureReason = frame.payload.failureReason;
         this.noteIteration(frame.payload.nodeId, frame.payload.iteration);
@@ -212,6 +251,25 @@ export class RunEventBuffer {
           frame.payload.nodeRunId,
           (this.text.get(frame.payload.nodeRunId) ?? '') + frame.payload.delta,
         );
+        return;
+      }
+
+      case 'tool.started': {
+        const view = this.upsert(frame.payload.nodeRunId, frame.payload.nodeId);
+        view.activeTool = {
+          callId: frame.payload.callId,
+          name: frame.payload.name,
+          ...(frame.payload.target === undefined ? {} : { target: frame.payload.target }),
+          startedAt: Date.now(),
+        };
+        return;
+      }
+
+      case 'tool.call': {
+        const view = this.byNodeRunId.get(frame.payload.nodeRunId);
+        if (view?.activeTool !== undefined && view.activeTool.callId === frame.payload.callId) {
+          delete view.activeTool;
+        }
         return;
       }
 
@@ -263,6 +321,34 @@ export class RunEventBuffer {
         this.runId ??= frame.payload.runId;
         this.status = 'RUNNING';
         this.pausedAt = undefined;
+        // D305: `run.resumed` is also how a run leaves a mid-run BLOCKED.
+        this.blockedReason = undefined;
+        this.blockedDetail = undefined;
+        return;
+      }
+
+      /* Domain (D303, D305, D323) — [audit W-5] */
+
+      case 'run.blocked': {
+        this.runId ??= frame.payload.runId;
+        // RUNNING → BLOCKED with a reason: the drive waits, Resume and Stop apply (D305).
+        this.status = 'BLOCKED';
+        this.blockedReason = frame.payload.reason;
+        this.blockedDetail = frame.payload.detail;
+        return;
+      }
+
+      case 'run.parked': {
+        this.runId ??= frame.payload.runId;
+        // Only a run that stays open parks (D323), so this says so even without its `run.config`.
+        this.stayOpen = true;
+        this.parked = true;
+        return;
+      }
+
+      case 'run.config': {
+        this.runId ??= frame.payload.runId;
+        this.stayOpen = frame.payload.config.stayOpen;
         return;
       }
 
@@ -330,6 +416,10 @@ export class RunEventBuffer {
     this.totals = zeroUsage();
     this.finalOutput = undefined;
     this.pausedAt = undefined;
+    this.blockedReason = undefined;
+    this.blockedDetail = undefined;
+    this.stayOpen = false;
+    this.parked = false;
     this.lastSeq = -1;
     this.seen.clear();
     this.byNodeRunId.clear();
@@ -352,7 +442,16 @@ export class RunEventBuffer {
       finalOutput: this.finalOutput,
       pausedAt: this.pausedAt,
       budgetHalt: this.budgetHalt,
-      allowedActions: status === undefined ? undefined : allowedRunActions(status),
+      allowedActions:
+        status === undefined
+          ? undefined
+          : allowedRunActions(status, {
+              blockedReason: this.blockedReason,
+              stayOpen: this.stayOpen,
+            }),
+      blockedReason: this.blockedReason,
+      blockedDetail: this.blockedDetail,
+      parked: this.parked,
       approvals: () => [...this.pendingApprovals.values()],
       verdicts: (nodeRunId) => [...(this.verdictsByNodeRunId.get(nodeRunId) ?? [])],
       iterations: (nodeId) => this.iterationByNodeId.get(nodeId) ?? 0,

@@ -470,9 +470,6 @@ let ingestPace = 150;
 export function setIngestPace(ms: number): void {
   ingestPace = Math.max(0, ms);
 }
-export function currentIngestPace(): number {
-  return ingestPace;
-}
 
 /** Fail the next document at `parsing` whatever its bytes — the `ingest-failed` story's knob. */
 let failNext = false;

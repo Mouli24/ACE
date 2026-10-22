@@ -1,6 +1,8 @@
 import {
+  APPROVAL_COMMAND_MAX,
   APPROVAL_PREVIEW_MAX,
   validateAgainstContract,
+  type ApprovalCommand,
   type Envelope,
   type EnvelopeContract,
   type FailureReason,
@@ -20,6 +22,8 @@ import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import type { Scope } from '../ports/index.js';
 import type { ApprovalGate } from '../approvals/index.js';
+import type { ToolCommand } from '../runs/agentic/commands.js';
+import { maskSecrets } from '../security/secret-patterns.js';
 import {
   redactArgs,
   type ToolGuardrailEvaluator,
@@ -628,6 +632,29 @@ export const TOOL_CHECK_ORDER = [
   'destructive_action',
 ] as const satisfies readonly GuardrailCheckType[];
 
+/** The `pass` verdict's reason when a node's allowed commands let a command run unasked (D376). */
+export const ALLOWED_COMMAND_REASON =
+  "This node's allowed commands cover the command, so it ran without asking.";
+
+/**
+ * The command as the card shows it (D376): secret-shaped values masked (BR-07) and cut to
+ * `APPROVAL_COMMAND_MAX`. A prefix carrying anything secret-shaped is not offered, so Always allow
+ * can never write one into the workflow.
+ */
+export function approvalCommandOf({ text, gate }: ToolCommand): ApprovalCommand {
+  const masked = maskSecrets(text);
+  const prefix = gate.kind === 'ask' ? gate.allowPrefix : undefined;
+  const offered = prefix !== undefined && maskSecrets(prefix) === prefix;
+  return {
+    text:
+      masked.length <= APPROVAL_COMMAND_MAX
+        ? masked
+        : `${masked.slice(0, APPROVAL_COMMAND_MAX - 1)}…`,
+    ...(offered ? { allowPrefix: prefix } : {}),
+    denylisted: gate.kind === 'ask' && gate.denylisted,
+  };
+}
+
 /** Validates a tool call's arguments against its `inputSchema` (D217) — `@ace/guardrails`' checkToolArgs. */
 export type ToolArgsValidator = (
   definition: ToolDefinition,
@@ -790,6 +817,21 @@ export function createToolGuardrailEvaluator(
     // A passing check means the call is not destructive — nothing to approve.
     if (outcome === undefined || outcome.passed) return undefined;
 
+    /*
+     * D376: an agentic node's command its allowed commands cover runs without a card. The allowlist
+     * stands in for the asking only — a policy that blocks or warns on destructive tools still does —
+     * and a `pass` verdict, stored but never announced, says why nobody was asked.
+     */
+    if (check.action === 'ask_user' && bag.command?.gate.kind === 'allow') {
+      const allowed = verdictFor(
+        check,
+        { passed: true, reason: ALLOWED_COMMAND_REASON },
+        { id: nextId(), nodeRunId: target.nodeRunId, at: now() },
+      );
+      verdicts.push(await record(target, { ...allowed, action: 'pass' }));
+      return undefined;
+    }
+
     verdicts.push(await recordCheck(target, check, outcome));
 
     if (check.action === 'pass' || check.action === 'warn') return undefined;
@@ -816,6 +858,7 @@ export function createToolGuardrailEvaluator(
       reason: outcome.reason,
       // The card shows the tool and its arguments with secret-shaped values masked (BR-07).
       preview: previewOf(`${bag.definition.name} ${JSON.stringify(redactArgs(bag.args))}`),
+      ...(bag.command === undefined ? {} : { command: approvalCommandOf(bag.command) }),
       ...(target.signal === undefined ? {} : { signal: target.signal }),
     });
 
@@ -825,6 +868,9 @@ export function createToolGuardrailEvaluator(
         kind: 'reject',
         reason: `A reviewer rejected this tool call${note}: ${outcome.reason}`,
         verdicts: [...verdicts],
+        ...(decision.note === undefined ? {} : { note: decision.note }),
+        // D375/D376: an agentic node's command — the executor hands the denial back to the model.
+        ...(bag.command === undefined ? {} : { command: true as const }),
       };
     }
 

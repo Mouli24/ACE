@@ -35,7 +35,7 @@ export function VerdictList({ verdicts }: { verdicts: readonly Verdict[] }) {
               className={
                 verdict.passed
                   ? 'text-[11px] text-[var(--muted)]'
-                  : 'text-[11px] font-semibold text-[#c94c27]'
+                  : 'text-[11px] font-semibold text-danger'
               }
             >
               {verdict.passed ? 'passed' : 'did not pass'}

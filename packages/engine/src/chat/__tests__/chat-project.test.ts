@@ -113,6 +113,8 @@ function makeTools(): { provider: ToolProvider; runs: ToolRun[] } {
     });
   add('list_files', false, () => ({ entries: ['src/'] }));
   add('read_file', false, () => ({ path: 'src/a.ts', content: SECRET }));
+  // D385: chat offers `search` too
+  add('search', false, () => ({ matches: [] }));
   add('write_file', false, () => ({ path: 'src/b.ts', written: true }));
   add('edit_file', false, () => ({ ok: true }));
   add('git_status', false, () => ({ files: [] }));
@@ -276,7 +278,7 @@ describe('D302 a CLI node chats in the project folder', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('D302 an API node gets the non-destructive project tools in a bounded loop', () => {
-  it('offers exactly the six project tools — never run_command, never a destructive one', async () => {
+  it('offers exactly the seven project tools (D385 added search) — never run_command, never a destructive one', async () => {
     const { provider } = makeTools();
     const { adapter, requests } = scriptedAdapter(() => answer('Nothing to do.'));
     build({
@@ -352,7 +354,7 @@ describe('D302 an API node gets the non-destructive project tools in a bounded l
     ]);
   });
 
-  it('drops one of the six when the registry marks it destructive', async () => {
+  it('drops one of the project tools when the registry marks it destructive', async () => {
     const { provider } = makeTools();
     const shadowed: ToolProvider = {
       get: (name) => {
@@ -371,7 +373,7 @@ describe('D302 an API node gets the non-destructive project tools in a bounded l
       await service.chat(coder.id, { content: hi() })
     ).done;
     expect(requests[0]?.tools?.map((tool) => tool.name)).not.toContain('edit_file');
-    expect(requests[0]?.tools).toHaveLength(5);
+    expect(requests[0]?.tools).toHaveLength(CHAT_PROJECT_TOOLS.length - 1);
   });
 
   it('refuses a tool it did not offer without running it', async () => {

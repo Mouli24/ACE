@@ -1,6 +1,6 @@
 import { CLI_INSTALL_HINTS, type CliPermission, type NodeError } from '@ace/contracts';
 
-import { ProviderCallError, type ProviderAdapter } from '../../adapter.js';
+import { ProviderCallError, type GenerateRequest, type ProviderAdapter } from '../../adapter.js';
 import {
   cliExitError,
   cliModel,
@@ -175,14 +175,27 @@ export function codexModelsFrom(stdout: string): string[] {
   }
 }
 
+/**
+ * D389: a node's reasoning effort as Codex's own config key. Codex's levels stop at `xhigh`, so
+ * `max` is sent as that; unset, nothing is sent and Codex keeps its own default.
+ */
+export function codexEffortArgs(effort: GenerateRequest['reasoningEffort']): string[] {
+  if (effort === undefined) return [];
+  return ['-c', `model_reasoning_effort="${effort === 'max' ? 'xhigh' : effort}"`];
+}
+
 export const codexDialect: CliDialect = {
   type: 'codex_cli',
   bin: 'codex',
   label: 'Codex CLI',
-  args: (req, permission) => [
+  args: (req, permission, access) => [
     ...CODEX_BASE_ARGS,
-    ...PERMISSION_ARGS[permission],
+    // D383: Codex has no per-command allowlist; `edit_files` and `edit_commands` both run in its workspace-write sandbox
+    ...(access === undefined
+      ? PERMISSION_ARGS[permission]
+      : PERMISSION_ARGS[access.access === 'read_only' ? 'read_only' : 'edit_files']),
     ...(req.modelId === 'default' ? [] : ['-m', req.modelId]),
+    ...codexEffortArgs(req.reasoningEffort),
     '-',
   ],
   stdin: withSystem,

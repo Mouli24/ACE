@@ -7,6 +7,7 @@ import type {
   HaltReason,
   Id,
   Model,
+  ModelCapabilitiesPatch,
   ModelQuery,
   NodeError,
   NodeRun,
@@ -59,11 +60,25 @@ export interface ProviderRepository {
 }
 
 export interface ModelRepository {
-  /** A refresh replaces a provider's catalog wholesale, so a withdrawn model disappears. */
+  /**
+   * A refresh replaces a provider's catalog wholesale, so a withdrawn model disappears. D380: a
+   * model passed with `capabilitiesSetByPerson` carries effective values; the stored discovered
+   * values stay as its base so an override can be cleared later.
+   */
   replaceForProvider(scope: Scope, providerId: Id, models: readonly Model[]): Promise<void>;
   list(scope: Scope, query: ModelQuery): Promise<Model[]>;
   find(scope: Scope, providerId: Id, modelId: string): Promise<Model | null>;
   deleteForProvider(scope: Scope, providerId: Id): Promise<void>;
+  /**
+   * D380: record what the person says this model can do. Applied by every read and kept by
+   * `replaceForProvider`. Resolves the updated row, or null when the provider lists no such model.
+   */
+  setCapabilities(
+    scope: Scope,
+    providerId: Id,
+    modelId: string,
+    patch: ModelCapabilitiesPatch,
+  ): Promise<Model | null>;
 }
 
 /** One frozen price table (FR-OBS-003). Written once per version and never updated. */
@@ -89,7 +104,8 @@ export interface RunPatch {
    * it, and BR-04 puts the snapshot in the same transaction as the row.
    */
   preflightIssues?: ValidationIssue[];
-  haltReason?: HaltReason;
+  /** `null` clears it: a run a retry, re-run or continue reopens is no longer halted (D81, D388). */
+  haltReason?: HaltReason | null;
   totals?: Usage;
   endedAt?: Timestamp;
   durationMs?: number;
@@ -98,14 +114,25 @@ export interface RunPatch {
   pausedAt?: Timestamp | null;
   /** `allowedRunActions(status)`, stamped wherever the status changes (FR-CTL-006, D71). */
   allowedActions?: RunAction[];
-  /** Set only alongside `haltReason: 'budget_exceeded'` (FR-GRD-008, D80). */
-  budgetHalt?: BudgetHalt;
+  /** Set only alongside `haltReason: 'budget_exceeded'` (FR-GRD-008, D80); `null` clears it with it. */
+  budgetHalt?: BudgetHalt | null;
   /** Set on the run a restart created: same snapshot, same inputs (FR-CTL-004). */
   restartedFromRunId?: Id;
   /** D305: why the run is BLOCKED mid-run; `null` clears it on resume. */
   blockedReason?: BlockedReason | null;
   /** D313: the run's Domain settings — its token budget can change mid-run. */
   domain?: RunDomainConfig;
+}
+
+/**
+ * [audit E-5] A compare-and-set on a run's status. With one, `update` checks the row's status and
+ * writes the patch in one step, and only while the status is one of `ifStatus`; a row whose status
+ * has moved on is left exactly as it is and the update answers `null`. Two controls that read the
+ * same run and both decided to write (a double Retry, a Pause landing as the run completes) can no
+ * longer both win.
+ */
+export interface RunStatusGuard {
+  ifStatus: readonly RunState[];
 }
 
 export interface RunRepository {
@@ -115,7 +142,8 @@ export interface RunRepository {
   listByWorkflow(scope: Scope, workflowId: Id, page: CursorQuery): Promise<Page<Run>>;
   /** Runs that were mid-flight — what crash recovery has to finish off (FR-SYS-009). */
   listActive(scope: Scope): Promise<Run[]>;
-  update(scope: Scope, id: Id, patch: RunPatch): Promise<Run | null>;
+  /** `null` when there is no such run, or when `guard` is given and the status did not match. */
+  update(scope: Scope, id: Id, patch: RunPatch, guard?: RunStatusGuard): Promise<Run | null>;
 }
 
 export interface NodeRunPatch {
@@ -149,6 +177,8 @@ export interface NodeRunPatch {
   inputEnvelopes?: NodeRun['inputEnvelopes'];
   /** D309: why the turn started. */
   trigger?: NodeRun['trigger'];
+  /** D378: an agentic node step's files and commands, written once the step ends. */
+  workspace?: NodeRun['workspace'];
 }
 /**
  * `verdicts` and `approvals` are deliberately absent: they are written through

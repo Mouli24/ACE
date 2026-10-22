@@ -16,6 +16,13 @@ export const DEFAULT_ONBOARDING_COMPLETED = false;
 /* Round 4 §2.1. `DEFAULT_MAX_UPLOAD_MB` lives with the upload rules it bounds, in artifacts.ts. */
 
 /**
+ * The highest upload limit that can be set (2 GB) [audit S-9]: an upload is held in memory whole, so
+ * the setting is no longer unbounded. A PATCH over it is refused; a value saved before the ceiling
+ * existed reads as the ceiling, rather than breaking every read of the settings.
+ */
+export const MAX_UPLOAD_MB = 2048;
+
+/**
  * Whether the code sandbox uses Docker (D13, FR-TOOL-004): `auto` uses it when it is available and
  * falls back to a limited child process, `off` never uses it.
  */
@@ -53,7 +60,12 @@ export const SettingsSchema = z.object({
   /** What all runs together may spend in a day; absent or null is no cap (round 3 §2.3, D72). */
   dailyBudgetUsd: BudgetUsdSchema.nullable().optional(),
   /** The upload limit in MB (round 4 §2.1, FR-MM-001); over it, `POST /artifacts` is 413. */
-  maxUploadMb: z.number().int().min(1).default(DEFAULT_MAX_UPLOAD_MB),
+  maxUploadMb: z
+    .number()
+    .int()
+    .min(1)
+    .transform((mb) => Math.min(mb, MAX_UPLOAD_MB))
+    .default(DEFAULT_MAX_UPLOAD_MB),
   /** The self-hosted SearXNG `web_search` queries; absent means no search tool (D14, FR-TOOL-005). */
   searxngUrl: z.url().optional(),
   dockerSandbox: DockerSandboxModeSchema.default(DEFAULT_DOCKER_SANDBOX),
@@ -77,7 +89,7 @@ export const SettingsPatchSchema = z.object({
   allowedOrigins: z.array(z.string()).optional(),
   /** `null` removes the daily budget (D72). */
   dailyBudgetUsd: BudgetUsdSchema.nullable().optional(),
-  maxUploadMb: z.number().int().min(1).optional(),
+  maxUploadMb: z.number().int().min(1).max(MAX_UPLOAD_MB).optional(),
   searxngUrl: z.url().optional(),
   dockerSandbox: DockerSandboxModeSchema.optional(),
   mcpEnabled: z.boolean().optional(),

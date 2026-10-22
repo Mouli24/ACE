@@ -14,7 +14,7 @@ import { NODE_KIND_LABEL, type CanvasNodeKind } from '../nodes/factory';
 import { runAfterCheck, runsAfter } from './run-order';
 
 const ROW =
-  'flex w-full cursor-pointer items-center justify-between gap-3 rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-2 text-left text-[13px] text-[var(--ink)] outline-none hover:border-[#ef6b3f] hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent';
+  'flex w-full cursor-pointer items-center justify-between gap-3 rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-2 text-left text-[13px] text-[var(--ink)] outline-none hover:border-[#ef6b3f] hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent';
 
 /**
  * D373: the card's More → "Run after…". Pick the node this one waits for; the link carries no

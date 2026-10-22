@@ -24,12 +24,12 @@ export interface ChatRosterEntry extends RosterEntry {
 /** The theme's composer placeholder (D335). */
 export const TEAM_PLACEHOLDER = 'Message the team… @ to tag an agent, / for commands';
 
-const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 const CHIP =
   'flex h-[24px] max-w-full items-center gap-[6px] rounded-full border border-[var(--line)] bg-[var(--chip)] pl-[9px] pr-[6px] text-[11px] text-[var(--ink)]';
 const CHIP_REMOVE = cn(
   FOCUS,
-  'flex h-[16px] w-[16px] shrink-0 cursor-pointer items-center justify-center rounded-full text-[9px] text-[var(--muted)] hover:text-[#c94c27]',
+  'flex h-[16px] w-[16px] shrink-0 cursor-pointer items-center justify-center rounded-full text-[9px] text-[var(--muted)] hover:text-danger',
 );
 
 /**
@@ -51,6 +51,7 @@ export function ChatComposer({
   roster = [],
   mainNodeId,
   replying = false,
+  queued = 0,
   onStop,
   onWorkflow,
   workflowBlocked,
@@ -63,8 +64,13 @@ export function ChatComposer({
   roster?: readonly ChatRosterEntry[];
   /** The conversation's main node; without one there is nobody to send to. */
   mainNodeId: string | undefined;
-  /** PG-1.6: a reply is on its way in this session, so Stop is offered. */
+  /** PG-1.6: a reply is on its way in this session, so Stop is offered (D391: while any is). */
   replying?: boolean;
+  /**
+   * D391: turns sent after the one being answered that still wait their turn in the engine's
+   * queue. Above zero — more than one turn outstanding — the composer says "N queued".
+   */
+  queued?: number;
   /** PG-1.6: abort the reply on its way; it is stored as `user_cancelled`. */
   onStop?: () => void;
   /**
@@ -269,6 +275,18 @@ export function ChatComposer({
         </div>
       )}
 
+      {queued > 0 && (
+        <p
+          role="status"
+          data-testid="chat-queued"
+          title={`${queued} more ${queued === 1 ? 'message waits' : 'messages wait'} for the reply before ${queued === 1 ? 'it' : 'them'}; each is answered in turn`}
+          className="flex items-center gap-[6px] text-[10.5px] text-[var(--muted)]"
+        >
+          <Icons.ListOrdered aria-hidden size={12} />
+          {queued} queued
+        </p>
+      )}
+
       {chips.length > 0 && (
         <ul className="flex flex-wrap gap-[6px]" data-testid="chat-chips" aria-label="References">
           {chips.map((chip) => {
@@ -317,12 +335,12 @@ export function ChatComposer({
       )}
 
       {uploadError !== undefined && (
-        <p role="alert" data-testid="chat-upload-error" className="text-[11px] text-[#c94c27]">
+        <p role="alert" data-testid="chat-upload-error" className="text-[11px] text-danger">
           {uploadError}
         </p>
       )}
 
-      <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] px-[10px] pb-[8px] pt-[10px] focus-within:border-[#ef6b3f]">
+      <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] px-[10px] pb-[8px] pt-[10px] focus-within:border-[var(--focus)]">
         <textarea
           ref={box}
           value={text}
@@ -415,7 +433,7 @@ export function ChatComposer({
               onClick={onStop}
               className={cn(
                 FOCUS,
-                'flex h-[30px] w-[30px] shrink-0 cursor-pointer items-center justify-center rounded-[8px] border border-[var(--line)] bg-transparent text-[#c94c27]',
+                'flex h-[30px] w-[30px] shrink-0 cursor-pointer items-center justify-center rounded-[8px] border border-[var(--line)] bg-transparent text-danger',
               )}
             >
               <Icons.Square aria-hidden size={12} className="fill-current" />
@@ -439,12 +457,12 @@ export function ChatComposer({
         </div>
       </div>
       {workflowError !== undefined && text.trim() !== '' && (
-        <p role="alert" data-testid="chat-target-error" className="text-[11px] text-[#c94c27]">
+        <p role="alert" data-testid="chat-target-error" className="text-[11px] text-danger">
           {workflowError}
         </p>
       )}
       {preview?.error !== undefined && (
-        <p role="alert" data-testid="chat-target-error" className="text-[11px] text-[#c94c27]">
+        <p role="alert" data-testid="chat-target-error" className="text-[11px] text-danger">
           {preview.error}
         </p>
       )}

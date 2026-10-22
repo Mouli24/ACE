@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http } from 'msw';
 
-import { db, installMockServer, renderApp } from '../test/app';
+import { db, installMockServer, renderApp, server } from '../test/app';
 
 installMockServer();
 
@@ -111,5 +112,78 @@ describe('FR-MOD-006 the catalog can be refreshed and says when it last was', ()
     );
     expect(screen.getByTestId('model-row-mock-text')).toHaveTextContent('Mock text');
     expect(db.listModels().every((model) => model.providerId === provider.id)).toBe(true);
+  });
+});
+
+describe('D380 a person can mark a model as tool-capable', () => {
+  it('the Tools switch sends { supportsTools: true } and the row shows the new state', async () => {
+    const user = userEvent.setup();
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    await openModelsTab(user);
+    const toggle = await screen.findByRole('switch', { name: 'Tools for mock-text' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+    await user.click(toggle);
+
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'Tools for mock-text' })).toHaveAttribute(
+        'aria-checked',
+        'true',
+      ),
+    );
+    const stored = db.listModels().find((m) => m.providerId === provider.id && m.modelId === 'mock-text');
+    expect(stored).toMatchObject({ supportsTools: true, capabilitiesSetByPerson: true });
+    expect(screen.getByTestId('model-row-mock-text')).toHaveTextContent('set by you');
+
+    // and it survives Refresh models
+    db.refreshModels(provider.id);
+    expect(
+      db.listModels().find((m) => m.providerId === provider.id && m.modelId === 'mock-text'),
+    ).toMatchObject({ supportsTools: true, capabilitiesSetByPerson: true });
+  });
+
+  it('Reset sends nulls and the row returns to what discovery says', async () => {
+    const user = userEvent.setup();
+    const provider = db.createProvider({ type: 'mock', name: 'Mock' });
+    await openModelsTab(user);
+    await user.click(await screen.findByRole('switch', { name: 'Tools for mock-text' }));
+
+    await user.click(await screen.findByRole('button', { name: 'Reset mock-text to discovered' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'Tools for mock-text' })).toHaveAttribute(
+        'aria-checked',
+        'false',
+      ),
+    );
+    const stored = db.listModels().find((m) => m.providerId === provider.id && m.modelId === 'mock-text');
+    expect(stored?.capabilitiesSetByPerson).toBeUndefined();
+    expect(screen.queryByRole('button', { name: 'Reset mock-text to discovered' })).toBeNull();
+  });
+});
+
+describe('audit P-20 the Models tab says it is loading', () => {
+  it('shows "Loading models…" until the catalog arrives', async () => {
+    const user = userEvent.setup();
+    db.createProvider({ type: 'mock', name: 'Mock' });
+    let answer: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    server.use(
+      http.get('*/models', async () => {
+        await answered;
+        // Nothing returned: the mock engine's own handler answers.
+        return undefined;
+      }),
+    );
+    renderApp('/providers');
+
+    await user.click(await screen.findByRole('tab', { name: 'Models' }));
+
+    expect(await screen.findByText('Loading models…')).toBeInTheDocument();
+    answer();
+    expect(await screen.findByTestId('models-table')).toBeInTheDocument();
+    expect(screen.queryByText('Loading models…')).not.toBeInTheDocument();
   });
 });

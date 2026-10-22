@@ -3,13 +3,17 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { ModelInfo, ProviderAdapter } from '../adapter.js';
 import {
   badEmbedResponse,
+  byChatName,
   checkVectors,
   createAiSdkAdapter,
   discoveredModel,
   getJson,
+  MAX_LIST_PAGES,
+  notAChatModel,
   postJson,
   requireEmbedModel,
   statusFromProbe,
+  withFamilyDefaults,
   type FetchLike,
 } from './ai-sdk.js';
 
@@ -26,6 +30,15 @@ export interface GoogleOptions {
   fetchImpl?: FetchLike;
 }
 
+/**
+ * The listing, as models. [audit P-6] `supportedGenerationMethods` says what each one does: a model
+ * without `generateContent` cannot chat — an embedder (`embedContent`) is kept, unavailable, for a
+ * knowledge base to pick, and one that does neither (an image or video generator) is left out. A
+ * chat model whose name says it speaks or draws is still told apart by that name.
+ *
+ * [audit P-2] Its `inputTokenLimit` is the model's real context window, and a Gemini 1.5+ chat
+ * model gets its family's tools, schema and image input.
+ */
 export function parseGoogleModelList(body: unknown): ModelInfo[] {
   const models = (body as { models?: unknown }).models;
   if (!Array.isArray(models)) return [];
@@ -34,23 +47,48 @@ export function parseGoogleModelList(body: unknown): ModelInfo[] {
     const name = (entry as { name?: unknown }).name;
     if (typeof name !== 'string') return [];
     const displayName = (entry as { displayName?: unknown }).displayName;
-    return [
-      discoveredModel(
-        name.replace(/^models\//, ''),
-        typeof displayName === 'string' ? displayName : undefined,
-      ),
-    ];
+    const limit = (entry as { inputTokenLimit?: unknown }).inputTokenLimit;
+    const listed = discoveredModel(
+      name.replace(/^models\//, ''),
+      typeof displayName === 'string' ? displayName : undefined,
+    );
+    const model: ModelInfo =
+      typeof limit === 'number' && Number.isInteger(limit) && limit > 0
+        ? { ...listed, contextWindow: limit }
+        : listed;
+    const methods = (entry as { supportedGenerationMethods?: unknown }).supportedGenerationMethods;
+    if (!Array.isArray(methods) || methods.includes('generateContent')) {
+      return [withFamilyDefaults(byChatName(model))];
+    }
+    return methods.includes('embedContent') ? [notAChatModel(model)] : [];
   });
 }
 
 export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
   const baseUrl = (options.baseUrl ?? GOOGLE_BASE_URL).replace(/\/+$/, '');
 
-  const probe = async (): Promise<unknown> =>
-    getJson({
-      url: `${baseUrl}/v1beta/models?key=${encodeURIComponent(options.apiKey)}`,
+  // [audit P-14] The listing is paged (50 by default): ask for the most a page holds, and follow
+  // `nextPageToken`.
+  const page = async (pageToken?: string): Promise<unknown> => {
+    const next = pageToken === undefined ? '' : `&pageToken=${encodeURIComponent(pageToken)}`;
+    return getJson({
+      url: `${baseUrl}/v1beta/models?key=${encodeURIComponent(options.apiKey)}&pageSize=1000${next}`,
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     });
+  };
+  const probe = (): Promise<unknown> => page();
+  const listAll = async (): Promise<ModelInfo[]> => {
+    const models: ModelInfo[] = [];
+    let pageToken: string | undefined;
+    for (let pages = 0; pages < MAX_LIST_PAGES; pages += 1) {
+      const body = await page(pageToken);
+      models.push(...parseGoogleModelList(body));
+      const { nextPageToken } = body as { nextPageToken?: unknown };
+      if (typeof nextPageToken !== 'string' || nextPageToken === '') break;
+      pageToken = nextPageToken;
+    }
+    return models;
+  };
 
   const provider = createGoogleGenerativeAI({
     apiKey: options.apiKey,
@@ -62,7 +100,7 @@ export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
     type: 'google',
     model: (modelId) => provider(modelId),
     check: () => statusFromProbe(probe),
-    listModels: async (): Promise<ModelInfo[]> => parseGoogleModelList(await probe()),
+    listModels: listAll,
     embed: async (texts, embedOptions) => {
       const model = requireEmbedModel(embedOptions);
       if (texts.length === 0) return [];

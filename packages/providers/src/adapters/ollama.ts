@@ -1,9 +1,10 @@
-import type { ProviderAdapter } from '../adapter.js';
+import type { ModelInfo, ProviderAdapter } from '../adapter.js';
 import {
   badEmbedResponse,
   checkVectors,
   type EmbedOptions,
   getJson,
+  notAChatModel,
   postJson,
   requireEmbedModel,
   type FetchLike,
@@ -17,13 +18,21 @@ import { createOpenAiCompatibleAdapter, normaliseBaseUrl } from './openai-compat
 
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 
+/**
+ * Ollama's own address from whatever was pasted [audit P-4]. Its OpenAI endpoint, `…/v1`, is a
+ * common paste, and the native `/api/*` routes sit beside that endpoint, not under it.
+ */
+export function ollamaRoot(baseUrl: string): string {
+  return normaliseBaseUrl(baseUrl).replace(/\/v1$/i, '');
+}
+
 export interface OllamaOptions {
   baseUrl?: string;
   fetchImpl?: FetchLike;
 }
 
 export function createOllamaAdapter(options: OllamaOptions = {}): ProviderAdapter {
-  const baseUrl = normaliseBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL);
+  const baseUrl = ollamaRoot(options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL);
   const adapter = createOpenAiCompatibleAdapter({
     type: 'ollama',
     baseUrl,
@@ -51,18 +60,27 @@ export function createOllamaAdapter(options: OllamaOptions = {}): ProviderAdapte
       ]);
       return models.map((model) => {
         const size = sizes.get(model.modelId);
-        const can = capabilities.get(model.modelId);
+        const shown = capabilities.get(model.modelId);
+        const can = shown?.capabilities;
         const inputTypes =
           can?.has('vision') === true && !model.inputTypes.includes('image')
             ? [...model.inputTypes, 'image' as const]
             : model.inputTypes;
-        return {
+        const described: ModelInfo = {
           ...model,
           inputTypes,
           supportsJson: true,
           supportsTools: can === undefined ? model.supportsTools : can.has('tools'),
+          // The model's real window, not the catalogue's 8192 guess (agentic nodes P2, Task 4).
+          ...(shown?.contextLength === undefined ? {} : { contextWindow: shown.contextLength }),
           ...(size === undefined ? {} : { sizeBytes: size }),
         };
+        // [audit P-6] `capabilities` says what the name only guesses: without `completion` the
+        // model does not chat (an embedder); with it, one named like a non-chat model still does.
+        if (can === undefined) return described;
+        if (!can.has('completion')) return notAChatModel(described);
+        const { available: _named, unavailableReason: _why, ...chat } = described;
+        return chat;
       });
     },
     // Ollama's native batch endpoint, not the OpenAI-style one this adapter otherwise speaks.
@@ -92,7 +110,7 @@ export async function ollamaModelSizes(
   let body: unknown;
   try {
     body = await getJson({
-      url: `${normaliseBaseUrl(baseUrl)}/api/tags`,
+      url: `${ollamaRoot(baseUrl)}/api/tags`,
       timeoutMs: DETECT_TIMEOUT_MS * 3,
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
     });
@@ -110,36 +128,57 @@ export async function ollamaModelSizes(
   return sizes;
 }
 
+/** The `<arch>.context_length` entry of `/api/show`'s `model_info`, when it is a sane integer. */
+function contextLengthOf(info: unknown): number | undefined {
+  if (typeof info !== 'object' || info === null) return undefined;
+  for (const [key, value] of Object.entries(info)) {
+    if (key.endsWith('.context_length') && typeof value === 'number' && Number.isInteger(value)) {
+      return value >= 1 ? value : undefined;
+    }
+  }
+  return undefined;
+}
+
 /** How many `/api/show` calls are in flight at once while a model list is read. */
 const SHOW_CONCURRENCY = 4;
 
+/** What `/api/show` says about one model. */
+export interface OllamaShown {
+  capabilities: Set<string>;
+  /** `model_info["<arch>.context_length"]`, when Ollama reports a usable number. */
+  contextLength?: number;
+}
+
 /**
  * Each model's `capabilities` from Ollama's `/api/show` (D-100): `completion`, `tools`, `vision`,
- * `embedding`, … Best effort and never throws: a model whose answer is missing or malformed is
+ * `embedding`, … and its context length (agentic nodes P2, Task 4). Best effort and never throws: a model whose answer is missing or malformed is
  * left out, and its catalogue defaults stand.
  */
 export async function ollamaCapabilities(
   baseUrl: string,
   modelIds: readonly string[],
   fetchImpl?: FetchLike,
-): Promise<Map<string, Set<string>>> {
-  const found = new Map<string, Set<string>>();
+): Promise<Map<string, OllamaShown>> {
+  const found = new Map<string, OllamaShown>();
   const queue = [...modelIds];
   const worker = async (): Promise<void> => {
     for (let modelId = queue.shift(); modelId !== undefined; modelId = queue.shift()) {
       try {
         const body = (await postJson({
-          url: `${normaliseBaseUrl(baseUrl)}/api/show`,
+          url: `${ollamaRoot(baseUrl)}/api/show`,
           body: { model: modelId },
           timeoutMs: DETECT_TIMEOUT_MS * 3,
           ...(fetchImpl === undefined ? {} : { fetchImpl }),
-        })) as { capabilities?: unknown } | null;
+        })) as { capabilities?: unknown; model_info?: unknown } | null;
         const list = body?.capabilities;
         if (Array.isArray(list)) {
-          found.set(
-            modelId,
-            new Set(list.filter((entry): entry is string => typeof entry === 'string')),
-          );
+          const contextLength = contextLengthOf(body?.model_info);
+          found.set(modelId, {
+            capabilities: new Set(
+              list.filter((entry): entry is string => typeof entry === 'string'),
+            ),
+            ...(contextLength === undefined ? {} : { contextLength }),
+          });
         }
       } catch {
         // an older Ollama, or one model it cannot describe: keep the defaults
@@ -166,7 +205,7 @@ export async function detectOllama(
   baseUrl: string = DEFAULT_OLLAMA_BASE_URL,
   fetchImpl?: FetchLike,
 ): Promise<OllamaDetection> {
-  const url = normaliseBaseUrl(baseUrl);
+  const url = ollamaRoot(baseUrl);
   try {
     await getJson({
       url: `${url}/v1/models`,
@@ -210,7 +249,7 @@ export async function ollamaVersion(
 ): Promise<string | undefined> {
   try {
     const body = (await getJson({
-      url: `${normaliseBaseUrl(baseUrl)}/api/version`,
+      url: `${ollamaRoot(baseUrl)}/api/version`,
       timeoutMs,
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
     })) as { version?: unknown } | null;
@@ -226,7 +265,7 @@ export async function ollamaRunningModels(
   fetchImpl?: FetchLike,
 ): Promise<OllamaRunningModel[]> {
   const body = (await getJson({
-    url: `${normaliseBaseUrl(baseUrl)}/api/ps`,
+    url: `${ollamaRoot(baseUrl)}/api/ps`,
     timeoutMs: OLLAMA_SHORT_TIMEOUT_MS,
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
   })) as { models?: unknown } | null;
@@ -257,7 +296,7 @@ export async function ollamaLoadModel(
   fetchImpl?: FetchLike,
 ): Promise<void> {
   await postJson({
-    url: `${normaliseBaseUrl(baseUrl)}/api/generate`,
+    url: `${ollamaRoot(baseUrl)}/api/generate`,
     body: { model: modelId, prompt: '', keep_alive: OLLAMA_KEEP_ALIVE, stream: false },
     timeoutMs: OLLAMA_LOAD_TIMEOUT_MS,
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
@@ -271,7 +310,7 @@ export async function ollamaUnloadModel(
   fetchImpl?: FetchLike,
 ): Promise<void> {
   await postJson({
-    url: `${normaliseBaseUrl(baseUrl)}/api/generate`,
+    url: `${ollamaRoot(baseUrl)}/api/generate`,
     body: { model: modelId, prompt: '', keep_alive: 0, stream: false },
     timeoutMs: OLLAMA_SHORT_TIMEOUT_MS,
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
@@ -308,7 +347,7 @@ export async function ollamaPullModel(
 
   try {
     touch();
-    const response = await fetchImpl(`${normaliseBaseUrl(baseUrl)}/api/pull`, {
+    const response = await fetchImpl(`${ollamaRoot(baseUrl)}/api/pull`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: name, stream: true }),

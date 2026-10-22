@@ -9,6 +9,7 @@ import {
   ROUND_1_ERROR_CODES,
   ROUND_3_ERROR_CODES,
   ROUND_4_ERROR_CODES,
+  RUN_CONTINUE_ERROR_CODES,
   aceError,
 } from '../errors.js';
 import { NODE_A } from './fixtures.js';
@@ -128,7 +129,14 @@ describe('FR-SYS-006 round 1 error codes', () => {
       'engine_stopping',
       'checkpoint_conflict',
       'checkpoints_unavailable',
+      'run_active',
     ]);
+  });
+
+  it('D388 adds nothing_to_continue, a 409 that is only ever an HTTP answer', () => {
+    expect([...RUN_CONTINUE_ERROR_CODES]).toEqual(['nothing_to_continue']);
+    expect(ERROR_CODES).toContain('nothing_to_continue');
+    expect(ERROR_CODE_HTTP_STATUS.nothing_to_continue).toBe(409);
   });
 
   // D370: skipped until updated to the product-gaps behaviour — see docs/team-prompts/product-gaps/tests-todo.md

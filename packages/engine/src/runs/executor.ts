@@ -1,6 +1,10 @@
 import {
+  TOOL_CALL_ID_MAX,
   TOOL_RESULT_SUMMARY_MAX,
+  agentToolNames,
+  agentWorkspaceOf,
   effectiveOutputTypes,
+  isAgentic,
   isCliProviderType,
   validateAgainstContract,
   type Envelope,
@@ -32,6 +36,7 @@ import type { EventBus } from '../events/index.js';
 import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type {
+  AgentTurn,
   ModelRouter,
   ProducedPart,
   ProviderAdapter,
@@ -66,6 +71,21 @@ import {
   type ToolProvider,
 } from './tool-loop.js';
 import { runTransform } from './transform.js';
+import {
+  AGENT_DEFAULT_CONTEXT_WINDOW,
+  CANCELLED_SUMMARY,
+  agentSystemPrompt,
+  backgroundProcessOf,
+  checkLimits,
+  deniedCommandResult,
+  elideTurns,
+  newAgentLoopState,
+  skippedCallResult,
+  toolTarget,
+  withoutOpaque,
+  type AgentLoopState,
+} from './agentic/index.js';
+import { changedPathsOf } from './agentic/summary.js';
 
 /**
  * The node executor (FR-EXE-004..010, FR-EXE-015, Arch §12.2).
@@ -115,7 +135,8 @@ export interface ExecuteNodeInput {
    * run is paused has not started — it is READY, which a pause turns PAUSED — so it hands the slot
    * straight back and waits for the resume. Absent, nothing holds it.
    */
-  gate?: Pick<RunGate, 'isPaused' | 'waitUntilDispatchable'>;
+  gate?: Pick<RunGate, 'isPaused' | 'waitUntilDispatchable'> &
+    Partial<Pick<RunGate, 'isDispatchClosed'>>;
   /**
    * Round 5: what an agent or Model node reads beyond its envelopes' own reads — retrieved chunks
    * and long-term memory — with the context guardrails over all of it (§2.2–§2.4, FR-GRD-004). The
@@ -339,6 +360,21 @@ export interface NodeExecutorDeps {
    * provider gets no folder and the project tools refuse.
    */
   projectFolderFor?: (runId: Id) => Promise<string | undefined>;
+
+  /* ------------------------------------------------------- agentic nodes */
+
+  /**
+   * D375: the computer an agentic node works on, for its rules — the OS, and the shell
+   * `run_command` runs in as `@ace/tools` resolves it (the engine may not import that package,
+   * CLAUDE.md §3.4 rule 3). Absent, the OS is this process's and the shell is named generically.
+   */
+  agentEnvironment?: { os: NodeJS.Platform; shell: string };
+  /**
+   * D375/D376 (Task 16 follow-up): the live run's command allowlist, so a CLI-backed agentic node
+   * is given the prefixes Always allow has grown, not only the snapshot's. Absent, or once the
+   * run has ended, the node's own `workspace.allowedCommands` apply.
+   */
+  allowlistFor?: (runId: Id) => { for(nodeId: Id): readonly string[] } | undefined;
 }
 
 export interface NodeExecutor {
@@ -544,6 +580,71 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     return { ...outcome, ...used };
   }
 
+  /**
+   * D375: an Agent node with workspace access works in the project folder in a multi-turn tool
+   * loop. `undefined` keeps today's path: an Off node, a replay (it calls nothing), and a node on a
+   * coding-agent CLI — **the CLI branch**: a CLI runs its own tools, so it keeps today's single
+   * call, and its per-node access (`GenerateRequest.cliAccess`, Task 16) is wired where this returns
+   * for it. A node with no project folder to work in fails here, before any call.
+   */
+  async function agenticSetup(
+    input: ExecuteNodeInput,
+  ): Promise<undefined | { failed: NodeError } | { state: AgentLoopState; workspaceRoot: string }> {
+    const node = input.node;
+    if (node.kind !== 'agent' || !isAgentic(node.config) || input.replay !== undefined) {
+      return undefined;
+    }
+    const providerId = node.config.providerId;
+    if (providerId !== undefined) {
+      let provider: PricedProvider | undefined;
+      try {
+        provider = await deps.providerFor?.(providerId);
+      } catch {
+        provider = undefined;
+      }
+      // The CLI branch (see above): today's single call.
+      if (provider !== undefined && isCliProviderType(provider.type)) return undefined;
+    }
+    let root: string | undefined;
+    try {
+      root = await deps.projectFolderFor?.(input.runId);
+    } catch {
+      root = undefined;
+    }
+    if (root === undefined || root === '') {
+      return {
+        failed: {
+          kind: 'invalid_config',
+          code: 'project_folder_missing',
+          message: `Give the project a folder to let ${node.name} work in it.`,
+          retryable: false,
+        },
+      };
+    }
+    return { state: newAgentLoopState(agentWorkspaceOf(node.config)), workspaceRoot: root };
+  }
+
+  /**
+   * The project folder of an agentic node on a coding-agent CLI, which works there with its own
+   * tools — so its prompt carries the same rules of working in the folder. Otherwise `undefined`.
+   */
+  async function cliWorkspaceRoot(input: ExecuteNodeInput): Promise<string | undefined> {
+    const node = input.node;
+    if (node.kind !== 'agent' || !isAgentic(node.config) || input.replay !== undefined) {
+      return undefined;
+    }
+    const providerId = node.config.providerId;
+    if (providerId === undefined) return undefined;
+    try {
+      const provider = await deps.providerFor?.(providerId);
+      if (provider === undefined || !isCliProviderType(provider.type)) return undefined;
+      const root = await deps.projectFolderFor?.(input.runId);
+      return root === undefined || root === '' ? undefined : root;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function callAgent(
     input: ExecuteNodeInput,
     used: Pick<NodeExecutionOutcome, 'sources' | 'droppedSources'>,
@@ -640,13 +741,48 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       envelopes = checked.envelopes;
     }
 
+    /* D375: an agentic node's loop state, or `undefined` for today's path. */
+    const setup = await agenticSetup(input);
+    if (setup !== undefined && 'failed' in setup) {
+      return fail(input, setup.failed, NO_USAGE, { verdicts });
+    }
+    const agent = setup;
+
+    // FR-ERR-005 / §2.1: the one contract-repair retry is the same prompt with the validation
+    // reason appended, so the model is told what was wrong with its last answer.
+    const ownInstructions =
+      input.repairReason === undefined
+        ? instructions
+        : `${instructions}\n\nYour previous answer was rejected: ${input.repairReason}\nAnswer again, satisfying the output contract exactly.`;
+    // An agentic CLI node keeps its single call, but is told the same rules, for its own tools.
+    const cliRoot = agent === undefined ? await cliWorkspaceRoot(input) : undefined;
     const prompt = assemblePrompt({
-      // FR-ERR-005 / §2.1: the one contract-repair retry is the same prompt with the validation
-      // reason appended, so the model is told what was wrong with its last answer.
+      // D375: an agentic node's instructions carry the rules of working in the project folder.
       instructions:
-        input.repairReason === undefined
-          ? instructions
-          : `${instructions}\n\nYour previous answer was rejected: ${input.repairReason}\nAnswer again, satisfying the output contract exactly.`,
+        agent === undefined
+          ? cliRoot === undefined || node.kind !== 'agent'
+            ? ownInstructions
+            : agentSystemPrompt({
+                instructions: ownInstructions,
+                workspaceRoot: cliRoot,
+                os: deps.agentEnvironment?.os ?? process.platform,
+                shell: deps.agentEnvironment?.shell ?? 'the system shell',
+                access: agentWorkspaceOf(node.config).access,
+                ownTools: true,
+                upstream: envelopes.flatMap((envelope) =>
+                  envelope.workspace === undefined ? [] : [envelope.workspace],
+                ),
+              })
+          : agentSystemPrompt({
+              instructions: ownInstructions,
+              workspaceRoot: agent.workspaceRoot,
+              os: deps.agentEnvironment?.os ?? process.platform,
+              shell: deps.agentEnvironment?.shell ?? 'the system shell',
+              access: agent.state.workspace.access,
+              upstream: envelopes.flatMap((envelope) =>
+                envelope.workspace === undefined ? [] : [envelope.workspace],
+              ),
+            }),
       envelopes,
       contract,
       iteration: input.iteration,
@@ -664,16 +800,28 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
     // The `agent | model` narrowing above does not reach inside `attemptWith`, so the fields it
     // needs are captured here rather than re-narrowed there.
     const outputTypes = effectiveTypes;
-    const { temperature } = node.config.execution;
+    const { temperature, reasoningEffort } = node.config.execution;
 
     /*
      * The tool set (round 4 §2.2). Only an agent node has tools; a bare model node never calls one.
      * The limit is `min(agent's own maxToolCalls, the policy's max_tool_calls)` — the policy's cap
      * arrives on the guardrail hook (`maxToolCalls`), and absent it the agent's own stands.
      */
-    const enabledTools = node.kind === 'agent' ? node.config.tools.enabled : [];
+    // D375: an agentic node is offered its access level's tools (plus its other enabled ones), and
+    // only the policy's `max_tool_calls` caps it — its Max turns and token budget bound it.
+    const enabledTools =
+      node.kind !== 'agent'
+        ? []
+        : agent === undefined
+          ? node.config.tools.enabled
+          : agentToolNames(node.config);
     const allowedDomains = node.kind === 'agent' ? node.config.tools.allowedDomains : [];
-    const agentMaxToolCalls = node.kind === 'agent' ? node.config.tools.maxToolCalls : 0;
+    const agentMaxToolCalls =
+      node.kind !== 'agent'
+        ? 0
+        : agent === undefined
+          ? node.config.tools.maxToolCalls
+          : Number.POSITIVE_INFINITY;
     const policyMaxToolCalls = input.guardrails?.maxToolCalls;
     const toolCallLimit = Math.min(
       agentMaxToolCalls,
@@ -787,6 +935,36 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       }
       const modelTakesTools = catalogRow?.supportsTools !== false;
 
+      /*
+       * D375: an agentic node never runs text-only on a model that cannot call tools — pre-flight
+       * refuses that for the node's own model, and a fallback to one ends here, before any call.
+       */
+      if (agent !== undefined && !modelTakesTools) {
+        return {
+          kind: 'done',
+          result: await fail(
+            input,
+            {
+              kind: 'invalid_config',
+              code: 'model_cannot_use_tools',
+              message: `${catalogRow?.displayName ?? chosen.modelId} can't use tools. Pick another model, or turn tools on for it in Providers.`,
+              retryable: false,
+            },
+            NO_USAGE,
+            { verdicts: [...verdicts] },
+          ),
+        };
+      }
+      // D377: a fallback to another model drops the opaque records the history holds, so one
+      // model's thought signatures are never replayed to another.
+      if (agent !== undefined) {
+        const modelKey = `${chosen.providerId}/${chosen.modelId}`;
+        if (agent.state.modelKey !== undefined && agent.state.modelKey !== modelKey) {
+          agent.state.history = withoutOpaque(agent.state.history);
+        }
+        agent.state.modelKey = modelKey;
+      }
+
       // A copy: a `model` chunk adds what the provider says actually answered, and the router's
       // route object is not this attempt's to change.
       const modelUsed: ModelUsed = { ...chosen };
@@ -858,6 +1036,11 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       /** The model still asked for a tool after the limit forced a no-tool turn (FR-TOOL-003). */
       let toolLimitExceeded = false;
       let toolCallCount = 0;
+      /** D375: the agentic node reached its Max turns or its token budget. */
+      let agentLimit: NodeError | undefined;
+      /** D377: what the latest model turn said, and the provider's own record of it. */
+      let turnText = '';
+      let turnOpaque: AgentTurn['opaque'];
 
       /** The recorded prompt for this attempt, with any untrusted tool-result blocks appended. */
       const recordedPrompt = (): { version: string; text: string } => ({
@@ -889,51 +1072,174 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
         /** After the call limit, the model is asked once more with no tools (§2.2, FR-TOOL-003). */
         let finalTurn = false;
 
-        for (;;) {
-          const turn = await takeTurn(toolResults.length > 0, finalTurn);
-          if (turn.kind === 'cancelled') {
-            cancelled = true;
-            break;
-          }
-
-          const pendingCalls = turn.pendingCalls;
-          // No tool requested: the turn's text/json/parts are this node's answer (FR-TOOL-003).
-          if (pendingCalls.length === 0) break;
-
-          // A tool after the model was asked to finish without tools ends the node (FR-TOOL-003).
-          if (finalTurn) {
-            toolLimitExceeded = true;
-            break;
-          }
-
-          // Every call of the turn, in order — models ask for several at once (review I2). Each is
-          // guarded and counted on its own; the adapter replays them one call, one result at a time.
-          for (const pendingCall of pendingCalls) {
-            const handled = await runToolCall(pendingCall, input.signal);
-            if (handled.failed !== undefined) {
-              toolFailure = handled.failed;
+        if (agent !== undefined) {
+          // D375: an agentic node's loop — turn history, elision, Max turns and token budget.
+          await runAgentTurns(agent.state);
+        } else {
+          for (;;) {
+            const turn = await takeTurn(toolResults.length > 0, finalTurn);
+            if (turn.kind === 'cancelled') {
+              cancelled = true;
               break;
             }
 
-            toolResults.push({
-              callId: pendingCall.callId,
-              name: pendingCall.name,
-              args: pendingCall.args,
-              result: handled.result,
+            const pendingCalls = turn.pendingCalls;
+            // No tool requested: the turn's text/json/parts are this node's answer (FR-TOOL-003).
+            if (pendingCalls.length === 0) break;
+
+            // A tool after the model was asked to finish without tools ends the node (FR-TOOL-003).
+            if (finalTurn) {
+              toolLimitExceeded = true;
+              break;
+            }
+
+            // Every call of the turn, in order — models ask for several at once (review I2). Each is
+            // guarded and counted on its own; the adapter replays them one call, one result at a time.
+            for (const pendingCall of pendingCalls) {
+              const handled = await runToolCall(pendingCall, input.signal);
+              if (handled.failed !== undefined) {
+                toolFailure = handled.failed;
+                break;
+              }
+
+              toolResults.push({
+                callId: pendingCall.callId,
+                name: pendingCall.name,
+                args: pendingCall.args,
+                result: handled.result,
+              });
+              // The result reaches the *recorded* prompt inside an untrusted block (FR-PRM-002); the
+              // adapter itself reads `toolResults` (FR-TOOL-010).
+              promptSuffix.push(toolResultBlock(pendingCall.name, handled.result));
+              toolCallCount += 1;
+
+              // Reaching the limit ends the loop; the model is asked once more with no tools (§2.2).
+              // The turn's later calls are not run, and are not replayed.
+              if (toolCallCount >= toolCallLimit) {
+                finalTurn = true;
+                break;
+              }
+            }
+            if (toolFailure !== undefined) break;
+          }
+        }
+
+        /**
+         * D375/D377: the agentic loop. Before every model call the node's limits are checked and its
+         * history trimmed to fit; each turn is one `node.turn`; every call of a turn is answered —
+         * run, denied, cancelled by a Stop or skipped past the policy's limit — before the next call,
+         * so no provider is ever sent a call without its result.
+         */
+        async function runAgentTurns(state: AgentLoopState): Promise<void> {
+          // Carried across a fallback: a node already at the policy's cap is asked without tools.
+          let withoutTools = state.toolCalls >= toolCallLimit;
+          const budget = {
+            contextWindow: catalogRow?.contextWindow ?? AGENT_DEFAULT_CONTEXT_WINDOW,
+            fixedChars:
+              prompt.text.length + prompt.system.length + JSON.stringify(offeredTools).length,
+          };
+
+          for (;;) {
+            agentLimit = checkLimits(state, state.workspace);
+            if (agentLimit !== undefined) return;
+            state.history = elideTurns(state.history, budget);
+
+            const inBefore = tokensIn;
+            const outBefore = tokensOut;
+            const turn = await takeTurn(state.turns > 0, withoutTools);
+            if (turn.kind === 'cancelled') {
+              cancelled = true;
+              return;
+            }
+            state.turns += 1;
+            const turnIn = Math.max(0, tokensIn - inBefore);
+            const turnOut = Math.max(0, tokensOut - outBefore);
+            // A provider that reports no usage is estimated for the budget, characters ÷ 4 (D313).
+            const reported = turnIn + turnOut > 0;
+            state.tokensIn += reported ? turnIn : estimateTokens(prompt.text);
+            state.tokensOut += reported ? turnOut : estimateTokens(turnText);
+
+            const calls = turn.pendingCalls;
+            if (!input.signal.aborted) {
+              await deps.bus.emit({
+                type: 'node.turn',
+                workflowId: input.workflowId,
+                runId: input.runId,
+                payload: {
+                  runId: input.runId,
+                  nodeRunId: input.nodeRunId,
+                  nodeId: input.node.id,
+                  turn: state.turns,
+                  tokensIn: turnIn,
+                  tokensOut: turnOut,
+                  toolCalls: calls.length,
+                },
+              });
+            }
+            // No tool requested: this turn's words are the node's answer (FR-TOOL-003).
+            if (calls.length === 0) return;
+            // A tool after the model was asked to finish without tools ends the node (FR-TOOL-003).
+            if (withoutTools) {
+              toolLimitExceeded = true;
+              return;
+            }
+
+            const results: ToolResult[] = [];
+            for (let index = 0; index < calls.length; index += 1) {
+              const call = calls[index]!;
+              // Past the policy's limit: answered, not run; the model is asked once more without
+              // tools (round 4 §2.2).
+              if (withoutTools) {
+                results.push({ ...call, result: skippedCallResult(toolCallLimit) });
+                continue;
+              }
+              // A Stop mid-batch: no further call runs and none is sent; the rest are logged.
+              if (input.signal.aborted) {
+                await logCancelled(calls.slice(index));
+                throw userCancelledError('The run was stopped before this tool call ran.');
+              }
+              let handled: Awaited<ReturnType<typeof runToolCall>>;
+              try {
+                handled = await runToolCall(call, input.signal);
+              } catch (error) {
+                if (input.signal.aborted) await logCancelled(calls.slice(index));
+                throw error;
+              }
+              if (handled.failed !== undefined) {
+                toolFailure = handled.failed;
+                return;
+              }
+              results.push({ ...call, result: handled.result });
+              // The recorded prompt keeps each result's summary, so a long loop's row stays
+              // bounded; the model reads the whole result through `turns` (FR-TOOL-010).
+              promptSuffix.push(toolResultBlock(call.name, summariseResult(handled.result)));
+              state.toolCalls += 1;
+              toolCallCount = state.toolCalls;
+              if (state.toolCalls >= toolCallLimit) withoutTools = true;
+            }
+
+            state.history.push({
+              text: turnText,
+              toolCalls: calls.map(({ callId, name, args }) => ({ callId, name, args })),
+              results,
+              ...(turnOpaque === undefined ? {} : { opaque: turnOpaque }),
             });
-            // The result reaches the *recorded* prompt inside an untrusted block (FR-PRM-002); the
-            // adapter itself reads `toolResults` (FR-TOOL-010).
-            promptSuffix.push(toolResultBlock(pendingCall.name, handled.result));
-            toolCallCount += 1;
-
-            // Reaching the limit ends the loop; the model is asked once more with no tools (§2.2).
-            // The turn's later calls are not run, and are not replayed.
-            if (toolCallCount >= toolCallLimit) {
-              finalTurn = true;
-              break;
-            }
           }
-          if (toolFailure !== undefined) break;
+        }
+
+        /** D375: the calls a Stop caught before they ran, logged the way a failed call is. */
+        async function logCancelled(calls: readonly PendingToolCall[]): Promise<void> {
+          const at = deps.now?.() ?? new Date().toISOString();
+          for (const call of calls) {
+            await logToolCall(call, {
+              status: 'error',
+              resultSummary: CANCELLED_SUMMARY,
+              durationMs: 0,
+              verdicts: [],
+              at,
+              callId: call.callId,
+            });
+          }
         }
 
         /**
@@ -990,6 +1296,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             replayed === undefined
               ? await deps.adapterFor(chosen.providerId)
               : createReplayAdapter(replayed);
+          turnText = '';
+          turnOpaque = undefined;
           /*
            * `execution.timeoutMs` is the node's own clock for one provider turn, and it starts here —
            * once the slot is held, never while the node queued for it (D66), and never across a tool
@@ -1022,11 +1330,36 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               ...(providerSchema === undefined ? {} : { jsonSchema: providerSchema }),
               ...(contract.maxTokens === undefined ? {} : { maxTokens: contract.maxTokens }),
               temperature,
+              // D389: only when the node sets one; unset, the request is what it always was.
+              ...(reasoningEffort === undefined || reasoningEffort === null
+                ? {}
+                : { reasoningEffort }),
               runId: input.runId,
               iteration: input.iteration,
               ...(workingDir === undefined ? {} : { workingDir }),
+              // D375: a coding-agent CLI node with workspace access carries its access level and
+              // the run's live allowlist; the adapter maps them to its own flags. Off sends nothing.
+              ...(input.node.kind === 'agent' &&
+              isAgentic(input.node.config) &&
+              isCliProviderType(adapter.type) &&
+              replayed === undefined
+                ? {
+                    cliAccess: {
+                      access: agentWorkspaceOf(input.node.config).access,
+                      allowedCommands: [
+                        ...(deps.allowlistFor?.(input.runId)?.for(input.node.id) ??
+                          agentWorkspaceOf(input.node.config).allowedCommands),
+                      ],
+                    },
+                  }
+                : {}),
               ...(offerTools ? { tools: offeredTools } : {}),
-              ...(withResults ? { toolResults } : {}),
+              // D377: an agentic node sends its turns so far, which supersede `toolResults`.
+              ...(agent !== undefined
+                ? { turns: agent.state.history }
+                : withResults
+                  ? { toolResults }
+                  : {}),
             },
             callSignal,
           );
@@ -1036,6 +1369,7 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             switch (chunk.type) {
               case 'text':
                 text += chunk.delta;
+                turnText += chunk.delta;
                 tokens.push(chunk.delta);
                 break;
               case 'json':
@@ -1077,6 +1411,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                 break;
               case 'model':
                 modelUsed.resolvedModelId = chunk.modelId;
+                break;
+              case 'opaque':
+                // D377: kept as this turn's record for the node's next call; never leaves the node.
+                if (agent !== undefined) {
+                  turnOpaque = { providerType: chunk.providerType, payload: chunk.payload };
+                }
                 break;
               case 'finish':
                 finishReason = chunk.reason;
@@ -1134,6 +1474,23 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
 
           verdicts.push(...(step.verdicts ?? []));
 
+          /*
+           * D375/D376: the person denied an agentic node's command. That is their answer, not the
+           * node failing: the model reads it (and their note) and goes on, and the node is RUNNING
+           * again (the approval service's `onDecided`). A policy `block` still fails the node.
+           */
+          if (agent !== undefined && step.kind === 'reject' && step.command === true) {
+            await logToolCall(call, {
+              status: 'rejected',
+              resultSummary: step.reason,
+              durationMs: 0,
+              verdicts: step.verdicts ?? [],
+              at,
+              callId: call.callId,
+            });
+            return { result: deniedCommandResult(step.note) };
+          }
+
           if (step.kind !== 'allow') {
             await logToolCall(call, {
               status: step.kind === 'block' ? 'blocked' : 'rejected',
@@ -1159,11 +1516,29 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           let status: 'ok' | 'error' | 'timeout' = 'ok';
           /** A failed call's message, the log's summary of it (FR-TOOL-009). */
           let failure: string | undefined;
+          // D381: what an agentic node is doing right now, for its card; `tool.call` ends it.
+          if (agent !== undefined && call.callId !== '') {
+            const target = toolTarget(call.name, call.args, agent.state.backgroundCommands);
+            await deps.bus.emitTransient({
+              type: 'tool.started',
+              workflowId: input.workflowId,
+              runId: input.runId,
+              payload: {
+                runId: input.runId,
+                nodeRunId: input.nodeRunId,
+                nodeId: input.node.id,
+                callId: call.callId.slice(0, TOOL_CALL_ID_MAX),
+                name: call.name,
+                ...(target === undefined ? {} : { target }),
+              },
+            });
+          }
           try {
             result = await registered!.run(call.args, {
               runId: input.runId,
               nodeId: input.node.id,
               sandboxDir,
+              allowedDomains,
               signal: toolSignal,
               ...(workingDir === undefined ? {} : { projectDir: workingDir }),
             });
@@ -1171,6 +1546,16 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             failure = error instanceof Error ? error.message : String(error);
             status = isToolTimeout(error) ? 'timeout' : 'error';
             result = { error: failure, status };
+          }
+          // D381: a background command, so a later `command_output` can name what it checks.
+          const processId = agent === undefined ? undefined : backgroundProcessOf(result);
+          const command = (call.args as { command?: unknown } | null)?.command;
+          if (
+            processId !== undefined &&
+            call.name === 'run_command' &&
+            typeof command === 'string'
+          ) {
+            agent?.state.backgroundCommands.set(processId, command);
           }
 
           // What the model reads next passes the context point first, a failure's message included.
@@ -1182,9 +1567,15 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
               durationMs: durationSince(at),
               verdicts: step.verdicts ?? [],
               at,
+              ...(agent === undefined ? {} : { callId: call.callId }),
             });
             return { failed: judged.failed };
           }
+          // D378: the project files an agentic node's successful call changed, for its step summary.
+          const changedPaths =
+            agent === undefined || status !== 'ok'
+              ? undefined
+              : changedPathsOf(call.name, call.args, result, workingDir);
           await logToolCall(call, {
             status,
             resultSummary:
@@ -1194,6 +1585,8 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             durationMs: durationSince(at),
             verdicts: step.verdicts ?? [],
             at,
+            ...(agent === undefined ? {} : { callId: call.callId }),
+            ...(changedPaths === undefined ? {} : { changedPaths }),
           });
           return { result: judged.result };
         }
@@ -1230,6 +1623,10 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             durationMs: number;
             verdicts: Verdict[];
             at: string;
+            /** D381: an agentic node's call id, which its `tool.started` frame named. */
+            callId?: string;
+            /** D378: the project files an agentic node's call changed. */
+            changedPaths?: string[];
           },
         ): Promise<void> {
           const toolCall = buildToolCall({
@@ -1242,13 +1639,23 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             status: fields.status,
             verdicts: fields.verdicts,
             at: fields.at,
+            ...(fields.changedPaths === undefined ? {} : { changedPaths: fields.changedPaths }),
           });
           await deps.recordToolCall?.(input.runId, toolCall);
+          const callId =
+            fields.callId === undefined || fields.callId === ''
+              ? undefined
+              : fields.callId.slice(0, TOOL_CALL_ID_MAX);
           await deps.bus.emit({
             type: 'tool.call',
             workflowId: input.workflowId,
             runId: input.runId,
-            payload: { runId: input.runId, nodeRunId: input.nodeRunId, toolCall },
+            payload: {
+              runId: input.runId,
+              nodeRunId: input.nodeRunId,
+              toolCall,
+              ...(callId === undefined ? {} : { callId }),
+            },
           });
         }
       } catch (error) {
@@ -1303,9 +1710,12 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           result: await fail(
             input,
             userCancelledError(
-              starting === undefined
-                ? 'The run was stopped before this node run started.'
-                : 'The run was stopped before this call was made.',
+              // [audit E-4] Not stopped by anyone: a crossed cost cap closed the run to new calls.
+              !input.signal.aborted && input.gate?.isDispatchClosed?.() === true
+                ? 'The run reached its cost cap before this call was made.'
+                : starting === undefined
+                  ? 'The run was stopped before this node run started.'
+                  : 'The run was stopped before this call was made.',
             ).nodeError,
             // A stop between two turns (D-062) keeps what the turns before it spent (FR-ERR-007).
             called ? usageNow() : NO_USAGE,
@@ -1329,6 +1739,9 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
       const usage: Usage =
         sawUsage || !called ? usageNow() : { ...usageNow(), source: 'estimated' };
 
+      // D375: an agentic node's answer is its last turn's words, not its narration on the way.
+      if (agent !== undefined) text = turnText;
+
       /*
        * A tool-point block or a rejected approval ends the node GUARDRAIL_VIOLATION (§2.2). The
        * offending ToolCall is already logged `blocked`/`rejected`; this is the node run's own end.
@@ -1340,6 +1753,18 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
             modelUsed,
             prompt: recordedPrompt(),
             failureReason: toolFailure.failureReason,
+            verdicts: [...verdicts],
+          }),
+        };
+      }
+
+      /* D375: the agentic node reached its Max turns or its token budget: RUN_FAILED, kind `agent`. */
+      if (agentLimit !== undefined) {
+        return {
+          kind: 'done',
+          result: await fail(input, agentLimit, usage, {
+            modelUsed,
+            prompt: recordedPrompt(),
             verdicts: [...verdicts],
           }),
         };

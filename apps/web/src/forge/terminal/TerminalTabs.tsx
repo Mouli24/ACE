@@ -18,7 +18,7 @@ import { useProjectTerminals, useTerminalStore, type TerminalTab } from './termi
 
 /** The editor tab strip's 20px close button (D334): × on a tab, + after the last one. */
 const SMALL_BUTTON =
-  'h-[20px] w-[20px] shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent leading-none text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-45';
+  'h-[20px] w-[20px] shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent leading-none text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-not-allowed disabled:opacity-45';
 
 /** The Stage cards' RUNNING colour, for the dot on a tab whose process runs. */
 const RUNNING = nodeStatusLook('RUNNING').color;
@@ -88,7 +88,7 @@ export function TerminalTabs({
                     if (event.key === 'Escape') setRenaming(undefined);
                   }}
                   onBlur={(event) => commitRename(tab.id, event.currentTarget.value)}
-                  className="ml-[8px] h-[22px] w-28 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-[6px] text-[12px] text-[var(--ink)] outline-none focus:border-[#ef6b3f]"
+                  className="ml-[8px] h-[22px] w-28 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-[6px] text-[12px] text-[var(--ink)] outline-none focus:border-[var(--focus)]"
                 />
               ) : (
                 <button
@@ -105,7 +105,7 @@ export function TerminalTabs({
                     cancelTerminalFocus();
                     setRenaming(tab.id);
                   }}
-                  className="flex h-full cursor-pointer items-center gap-[6px] border-none bg-transparent pl-[12px] outline-none focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+                  className="flex h-full cursor-pointer items-center gap-[6px] border-none bg-transparent pl-[12px] outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]"
                 >
                   {tab.processId !== undefined && (
                     <span

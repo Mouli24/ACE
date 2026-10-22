@@ -48,6 +48,7 @@ import {
 import { downloadWorkflowExport } from '../../workflows/export';
 import { useDuplicateWorkflow, useWorkflows } from '../../workflows/hooks';
 import { usePanelsStore } from '../stores/panels';
+import { APP_LINKS } from './app-links';
 
 type OpenDialog =
   | { kind: 'create' }
@@ -66,16 +67,6 @@ const ACTION_LABEL: Readonly<Record<RunAction, string>> = {
   restart: 'Restart',
   end: 'End',
 };
-
-/** Where the ACE section goes (D331): what the old top bar's links and More menu reached. */
-const ACE_LINKS = [
-  { to: '/providers', label: 'Providers', testId: 'menu-providers' },
-  { to: '/settings', label: 'Settings', testId: 'menu-settings' },
-  { to: '/usage', label: 'Usage', testId: 'menu-usage' },
-  { to: '/guardrails', label: 'Guardrail policies', testId: 'menu-guardrails' },
-  { to: '/library/tools', label: 'Tools', testId: 'menu-tools' },
-  { to: '/help/getting-started', label: 'Help', testId: 'menu-help' },
-] as const;
 
 const LINK_ITEM = 'text-[var(--ink)] no-underline hover:text-[var(--ink)]';
 
@@ -122,7 +113,7 @@ export function WorkspaceMenu({
             type="button"
             aria-label="Workspace menu"
             data-testid="workspace-menu"
-            className="flex h-6 cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="flex h-6 cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             <Icons.MoreHorizontal aria-hidden size={14} />
           </button>
@@ -333,8 +324,9 @@ export function WorkspaceMenu({
 
           <DropdownMenuSeparator />
           <DropdownMenuLabel>ACE</DropdownMenuLabel>
-          {ACE_LINKS.map(({ to, label, testId }) => (
-            <MenuLink key={to} to={to} testId={testId}>
+          {/* D331: what the old top bar's links and More menu reached — the app's pages (U-7) */}
+          {APP_LINKS.map(({ to, label, id }) => (
+            <MenuLink key={to} to={to} testId={`menu-${id}`}>
               {label}
             </MenuLink>
           ))}

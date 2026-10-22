@@ -1,6 +1,7 @@
 import type { CheckpointFile } from '@ace/contracts';
 
 import { ConfirmDialog } from '../explorer/EntryDialogs';
+import { nameOf } from '../files/paths';
 
 /** The files to be deleted the confirm names; the rest are counted. */
 export const DELETED_SHOWN = 10;
@@ -8,7 +9,8 @@ export const DELETED_SHOWN = 10;
 /**
  * Revert all asks first (D300, fix A-M9), in the Explorer's Delete confirm: how many files go back,
  * and — apart — the ones the agent added, which a revert deletes. One file's Revert stays one
- * click. `files` are the ones Revert all decides: the checkpoint's pending files.
+ * click unless it deletes the file ({@link RevertFileDialog}). `files` are the ones Revert all
+ * decides: the checkpoint's pending files.
  */
 export function RevertAllDialog({
   files,
@@ -59,5 +61,38 @@ export function RevertAllDialog({
         </div>
       )}
     </ConfirmDialog>
+  );
+}
+
+/** [audit F-3] Whether one file's Revert deletes it: the agent created it, so before it there was none. */
+export const revertDeletes = (file: CheckpointFile): boolean => file.change === 'added';
+
+/**
+ * [audit F-3] One file's Revert asks first when it deletes the file — one the agent created — in
+ * Revert all's confirm, saying so; a Revert that puts the file's older text back stays one click.
+ */
+export function RevertFileDialog({
+  path,
+  onConfirm,
+  onClose,
+}: {
+  path: string;
+  onConfirm(): void;
+  onClose(): void;
+}) {
+  return (
+    <ConfirmDialog
+      title={`Revert ${nameOf(path)}?`}
+      description="The agent created this file, so reverting its change deletes the file."
+      detail={path}
+      action="Revert and delete"
+      destructive
+      returnFocus
+      onConfirm={() => {
+        onConfirm();
+        return Promise.resolve(undefined);
+      }}
+      onClose={onClose}
+    />
   );
 }

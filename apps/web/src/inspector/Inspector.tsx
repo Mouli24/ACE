@@ -17,7 +17,14 @@ import { VerdictList } from '../guardrails/VerdictList';
 import { useProviders } from '../providers/hooks';
 import { LOCAL_COST_TEXT, UNKNOWN_COST_TITLE, costText, isLocalProvider } from '../runs/CostValue';
 import { NodeRunMenu } from '../runs/controls/NodeRunMenu';
-import { useRerunNode, useRetryNodeRun, useRun, useStartRun, useNodeRuns } from '../runs/hooks';
+import {
+  useNodeRuns,
+  useRerunNode,
+  useRetryNodeRun,
+  useRun,
+  useRunGoing,
+  useStartRun,
+} from '../runs/hooks';
 import { useSelectedRun } from '../runs/selected-run';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { EnvelopeView, PartView } from './EnvelopeView';
@@ -75,6 +82,8 @@ export function Inspector({ workflowId }: { workflowId: string }) {
   const rerun = useRerunNode();
   const start = useStartRun(workflowId);
   const busy = retry.isPending || rerun.isPending || start.isPending;
+  // [audit W-8] Start from this node is a new run: not while one is going
+  const runGoing = useRunGoing(workflowId);
   /*
    * PG-4.4: the node as the run knew it — its snapshot name first, so a node deleted or renamed
    * since the run started is still called what it ran as; never a stand-in like "this node".
@@ -95,9 +104,25 @@ export function Inspector({ workflowId }: { workflowId: string }) {
       {runId !== undefined && focusedNodeId === undefined && (
         <p className={EMPTY}>Select a node to see what its run did.</p>
       )}
-      {runId !== undefined && focusedNodeId !== undefined && forNode.length === 0 && (
-        <p className={EMPTY}>This node has not run yet.</p>
+      {/* [audit W-11] a read that failed is not "has not run": say so, and offer to read again */}
+      {runId !== undefined && focusedNodeId !== undefined && nodeRuns.isError && (
+        <div role="alert" data-testid="inspector-load-error" className={EMPTY}>
+          <p className="m-0">Could not read this run&apos;s records — {nodeRuns.error.message}</p>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-2"
+            disabled={nodeRuns.isFetching}
+            onClick={() => void nodeRuns.refetch()}
+          >
+            Retry
+          </Button>
+        </div>
       )}
+      {runId !== undefined &&
+        focusedNodeId !== undefined &&
+        !nodeRuns.isError &&
+        forNode.length === 0 && <p className={EMPTY}>This node has not run yet.</p>}
 
       {nodeRun && focusedNodeId !== undefined && (
         <>
@@ -125,7 +150,9 @@ export function Inspector({ workflowId }: { workflowId: string }) {
               nodeName={nodeName}
               state={nodeRun.status}
               nodeRunId={nodeRun.id}
+              error={nodeRun.error}
               busy={busy}
+              runGoing={runGoing}
               onRetry={() => retry.mutate({ nodeRunId: nodeRun.id, withDownstream: false })}
               onRetryWithDownstream={() =>
                 retry.mutate({ nodeRunId: nodeRun.id, withDownstream: true })
@@ -152,7 +179,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
               data-testid="inspector-error"
               className="flex flex-col gap-1 rounded-[10px] border border-[rgba(201,76,39,0.35)] bg-[var(--surface)] px-3 py-[10px] text-[12px]"
             >
-              <p className="m-0 font-machine text-[11px] text-[#c94c27]">
+              <p className="m-0 font-machine text-[11px] text-danger">
                 {nodeRun.error.kind} · {nodeRun.error.code}
               </p>
               <p className="m-0 text-[var(--ink)]">{nodeRun.error.message}</p>
@@ -213,7 +240,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
                     className={INNER_BOX}
                   >
                     <span
-                      className={`font-machine text-[11px] ${decision.decision === 'approve' ? 'text-[#2f9e63]' : 'text-[#c94c27]'}`}
+                      className={`font-machine text-[11px] ${decision.decision === 'approve' ? 'text-[#2f9e63]' : 'text-danger'}`}
                     >
                       {decision.decision === 'approve' ? 'approved' : 'rejected'} ·{' '}
                       {new Date(decision.decidedAt).toLocaleTimeString()}

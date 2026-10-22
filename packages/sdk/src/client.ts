@@ -29,7 +29,9 @@ import {
   RerunRequestSchema,
   RetryRequestSchema,
   UpdateGuardrailPolicyRequestSchema,
+  ModelCapabilitiesPatchSchema,
   ModelListResponseSchema,
+  ModelSchema,
   NodeRunSchema,
   ProviderCheckResultSchema,
   ProviderDetectResponseSchema,
@@ -46,6 +48,7 @@ import {
   GraphOpsRequestSchema,
   GraphOpsResponseSchema,
   HealthResponseSchema,
+  ImportWorkflowResponseSchema,
   ProjectSchema,
   SettingsPatchSchema,
   SettingsSchema,
@@ -68,6 +71,8 @@ import {
   type PolicyTestResponse,
   type RetryRequest,
   type UpdateGuardrailPolicyRequest,
+  type Model,
+  type ModelCapabilitiesPatch,
   type ModelListResponse,
   type ModelQuery,
   type NodeRun,
@@ -87,6 +92,7 @@ import {
   type GraphOpsResponse,
   type HealthResponse,
   type Id,
+  type ImportWorkflowResponse,
   type Page,
   type Project,
   type Settings,
@@ -123,6 +129,12 @@ import {
   type RepoStatus,
   type SaveFileRequest,
   type SaveFileResult,
+  // Forge: Python IntelliSense through the project's language server
+  LanguageRequestSchema,
+  LanguageResponseSchema,
+  type LanguageRequest,
+  type LanguageResponse,
+  type LanguageServerLanguage,
   // Forge (D301): the terminal's processes
   ProcessDetailSchema,
   ProcessInputRequestSchema,
@@ -473,8 +485,9 @@ export function createAceClient(options: AceClientOptions) {
       request('POST', `/workflows/${id}/estimate`, WorkflowEstimateSchema),
     exportWorkflow: (id: Id): Promise<WorkflowExport> =>
       request('GET', `/workflows/${id}/export`, WorkflowExportSchema),
-    importWorkflow: (projectId: Id, file: WorkflowExport): Promise<WorkflowGraphResponse> =>
-      request('POST', `/projects/${projectId}/workflows/import`, WorkflowGraphResponseSchema, {
+    /** [audit S-1] With a `notice` when the import cleared commands or lowered access. */
+    importWorkflow: (projectId: Id, file: WorkflowExport): Promise<ImportWorkflowResponse> =>
+      request('POST', `/projects/${projectId}/workflows/import`, ImportWorkflowResponseSchema, {
         schema: WorkflowExportSchema,
         value: file,
       }),
@@ -505,6 +518,21 @@ export function createAceClient(options: AceClientOptions) {
       request('POST', `/providers/${id}/check`, ProviderCheckResultSchema),
     refreshModels: (id: Id): Promise<RefreshModelsResponse> =>
       request('POST', `/providers/${id}/refresh-models`, RefreshModelsResponseSchema),
+    /**
+     * D380: say whether a discovered model takes tools and how big its window is. Survives
+     * `refreshModels`; the answer is the updated model, flagged `capabilitiesSetByPerson`.
+     */
+    patchModelCapabilities: (
+      providerId: Id,
+      modelId: string,
+      patch: ModelCapabilitiesPatch,
+    ): Promise<Model> =>
+      request(
+        'PATCH',
+        `/providers/${providerId}/models/${encodeURIComponent(modelId)}`,
+        ModelSchema,
+        { schema: ModelCapabilitiesPatchSchema, value: patch },
+      ),
     detectProviders: (): Promise<ProviderDetectResponse> =>
       request('GET', '/providers/detect', ProviderDetectResponseSchema),
     /** X1 (FR-PRV-008): which coding-agent CLIs the engine's machine has, and their sign-in. */
@@ -581,6 +609,13 @@ export function createAceClient(options: AceClientOptions) {
     stopRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/stop`, RunSchema),
     /** Answers the **new** run, which carries `restartedFromRunId` (FR-CTL-004). */
     restartRun: (runId: Id): Promise<Run> => request('POST', `/runs/${runId}/restart`, RunSchema),
+    /**
+     * D388: carry on a run that was cut off (HALTED crash/shutdown/stopped) — every interrupted
+     * node runs again with its downstream, in one drive of the same run; what finished is kept.
+     * 409 `invalid_run_state` otherwise, `nothing_to_continue` when nothing was cut off.
+     */
+    continueRun: (runId: Id): Promise<Run> =>
+      request('POST', `/runs/${runId}/continue`, RunSchema),
     /**
      * PG-5.4: replay a finished run — a **new** run with `replayOf`, answered from this run's
      * recorded node outputs with zero provider calls. 409 `invalid_run_state` unless COMPLETE or
@@ -661,7 +696,10 @@ export function createAceClient(options: AceClientOptions) {
 
     /* Approvals (round 3 §2.5, FR-GRD-013) */
 
-    /** The route is the decision; the note is optional and is logged with it. */
+    /**
+     * The route is the decision; the note is optional and is logged with it. D376: `always: true`
+     * also saves the card's `command.allowPrefix` on the node (400 when the card offers none).
+     */
     approveNodeRun: (nodeRunId: Id, body: ApprovalDecisionRequest = {}): Promise<NodeRun> =>
       request('POST', `/node-runs/${nodeRunId}/approve`, NodeRunSchema, {
         schema: ApprovalDecisionRequestSchema,
@@ -1029,6 +1067,25 @@ export function createAceClient(options: AceClientOptions) {
     /** The project's TS/JS sources for cross-file IntelliSense (D299 Phase 4), capped. */
     projectSources: (projectId: Id): Promise<SourcesResult> =>
       request('GET', `/projects/${projectId}/files/sources`, SourcesResultSchema),
+
+    /**
+     * One question to the project's language server (Python: Pyright) about one file; the LSP
+     * result as the server gave it. `signal` drops an answer the editor no longer wants.
+     */
+    languageRequest: (
+      projectId: Id,
+      language: LanguageServerLanguage,
+      body: LanguageRequest,
+      signal?: AbortSignal,
+    ): Promise<LanguageResponse> =>
+      request(
+        'POST',
+        `/projects/${projectId}/language/${language}`,
+        LanguageResponseSchema,
+        { schema: LanguageRequestSchema, value: body },
+        undefined,
+        signal,
+      ),
 
     /* IDE — Forge's terminal (D301, design §6.3) */
     startProcess: (projectId: Id, body: ProcessStartRequest): Promise<ProcessStartResponse> =>

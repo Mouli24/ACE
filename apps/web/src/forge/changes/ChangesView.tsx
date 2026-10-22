@@ -55,7 +55,7 @@ export function ChangesView({
     >
       {list.isPending && <p className={note}>Reading the checkpoints…</p>}
       {list.error && (
-        <p role="alert" className={cn(note, 'text-[#c94c27]')}>
+        <p role="alert" className={cn(note, 'text-danger')}>
           Couldn’t read the checkpoints: {messageOf(list.error)}
         </p>
       )}
@@ -160,7 +160,7 @@ function CheckpointEntry({
         )}
       </span>
       {checkpoint.status === 'failed' && (
-        <p role="alert" className="m-0 text-[11.5px] leading-[1.4] text-[#c94c27]">
+        <p role="alert" className="m-0 text-[11.5px] leading-[1.4] text-danger">
           {failureNote(checkpoint)}
         </p>
       )}
@@ -179,7 +179,7 @@ function CheckpointEntry({
         </p>
       )}
       {failure !== undefined && (
-        <p role="alert" className="m-0 text-[11px] text-[#c94c27]">
+        <p role="alert" className="m-0 text-[11px] text-danger">
           {failure}
         </p>
       )}
@@ -197,7 +197,7 @@ function CheckpointEntry({
             type="button"
             disabled={action.isPending}
             onClick={() => setConfirmRevert(true)}
-            className={cn(ROW_ACTION, 'text-[#c94c27] hover:text-[#c94c27]')}
+            className={cn(ROW_ACTION, 'text-danger hover:text-danger')}
           >
             Revert all
           </button>

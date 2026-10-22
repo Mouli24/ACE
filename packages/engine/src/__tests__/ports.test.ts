@@ -100,6 +100,7 @@ describe('Arch §7 Repository', () => {
         list: async () => [],
         find: async () => null,
         deleteForProvider: async () => undefined,
+        setCapabilities: async () => null,
       },
       priceTables: {
         put: async () => undefined,

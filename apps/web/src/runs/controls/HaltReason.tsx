@@ -47,8 +47,9 @@ export function haltReasonText(reason: HaltReason, budgetHalt?: BudgetHalt): str
 /** The next step: for a budget halt, which of the two caps to raise — they live in two places. */
 export function haltReasonAdvice(reason: HaltReason, budgetHalt?: BudgetHalt): string {
   switch (reason) {
+    // D388: a run cut off with work left can be carried on where it stopped, not only restarted.
     case 'stopped':
-      return 'Nothing failed. Restart the run when you are ready.';
+      return 'Nothing failed. Continue runs what you stopped and keeps what finished; Restart starts over.';
     case 'budget_exceeded': {
       if (budgetHalt === undefined) return 'Raise the cap, or make the run cheaper, then restart.';
       const cap =
@@ -62,9 +63,9 @@ export function haltReasonAdvice(reason: HaltReason, budgetHalt?: BudgetHalt): s
     case 'failure':
       return 'Open the Errors tab to see which node failed, then retry it.';
     case 'shutdown':
-      return 'Start the engine again, then restart the run.';
+      return 'Continue carries the run on where the shutdown cut it off, or restart it.';
     case 'crash':
-      return 'Start the engine again and restart the run; the run up to the crash is recorded.';
+      return 'The run up to the crash is recorded. Continue carries it on where it stopped, or restart it.';
   }
 }
 

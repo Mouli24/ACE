@@ -5,10 +5,18 @@
  * `pnpm install`. So a command line is split into segments, and every segment has to pass the
  * denylist and be covered by the node's allowlist before it may run without asking. Anything the
  * splitter cannot read confidently (substitution, `eval`, `bash -c`, heredocs, groups, unbalanced
- * quotes, a program read from stdin) is never auto-allowed.
+ * quotes, a program read from stdin) is never auto-allowed. The agent shell is bash, with
+ * PowerShell as a fallback (D376), so the splitter reads quoting as bash does and is not confident
+ * about anything the two could read differently from it: `^`, `$'…'`, `#` comments, newlines inside
+ * quotes, a backslash before a metacharacter.
  *
- * Pure: no I/O, no platform checks. Both POSIX shells and Windows (cmd / PowerShell) syntax are
- * recognised well enough to fail closed — when in doubt the result is "ask".
+ * An allowlist entry names a program on the PATH, run as itself (D376). A segment that sets
+ * environment variables first, runs a program by path, or redirects output to a file is something
+ * else, so no entry covers it and it is never offered for Always allow; nor is a prefix that starts
+ * with a wrapper or an interpreter (`sudo`, `node`, `bash`, …). Those still just ask.
+ *
+ * Pure: no I/O, no platform checks. Bash and PowerShell syntax are recognised well enough to fail
+ * closed — when in doubt the result is "ask".
  */
 
 export interface SplitResult {
@@ -22,7 +30,13 @@ export interface ClassifiedSegment {
   prefix?: string;
   /** Id of the first DENYLIST rule this segment matches. */
   denied?: string;
-  /** Covered by an allowlist entry and not denied. */
+  /**
+   * D376: why no allowlist entry can cover this segment — it sets environment variables first, runs
+   * a program by path, or redirects output to a file. It still only asks; it is never auto-allowed
+   * and never offered for Always allow.
+   */
+  uncoverable?: string;
+  /** Covered by an allowlist entry, not denied and not uncoverable. */
   allowed: boolean;
 }
 
@@ -76,6 +90,51 @@ const BACKSLASH_ESCAPABLE = new Set([
   "\n",
 ]);
 
+/**
+ * D376: characters after a `\` that bash and PowerShell read differently — bash escapes them,
+ * PowerShell keeps the `\` and acts on the character (a separator, a redirect, a quote, a newline).
+ */
+const SHELL_META = new Set([
+  ";",
+  "|",
+  "&",
+  ">",
+  "<",
+  "(",
+  ")",
+  "$",
+  "`",
+  '"',
+  "'",
+  "\n",
+  "\r",
+]);
+
+/** D376: what may come right before a `#` that starts a comment — whitespace or an operator. */
+const COMMENT_MAY_FOLLOW = new Set([
+  " ",
+  "\t",
+  "\n",
+  "\r",
+  ";",
+  "&",
+  "|",
+  "(",
+  ")",
+  "<",
+  ">",
+]);
+
+/* D376: the reasons a line is read without confidence because shells read it differently. */
+const CARET = "caret ^ (bash reads it literally, cmd.exe as an escape)";
+const DOLLAR_QUOTING = "$'…' or $\"…\" quoting";
+const COMMENT = "# comment";
+const NEWLINE_IN_QUOTES = "newline inside quotes";
+const BACKSLASH_BEFORE_META =
+  "backslash before a shell metacharacter (bash escapes it, PowerShell does not)";
+const BACKSLASH_IN_DOUBLE_QUOTES =
+  "backslash escape inside double quotes (bash escapes it, PowerShell does not)";
+
 function splitRaw(command: string): {
   raw: RawSegment[];
   reasons: Set<string>;
@@ -101,11 +160,15 @@ function splitRaw(command: string): {
 
     if (inSingle) {
       if (c === "'") inSingle = false;
+      else if (c === "\n" || c === "\r") reasons.add(NEWLINE_IN_QUOTES);
       cur += c;
       continue;
     }
     if (inDouble) {
       if (c === "\\" && '"\\$`'.includes(next) && next !== "") {
+        // Bash escapes these inside double quotes; PowerShell keeps the `\` and reads the next
+        // character as itself — a `"` that ends the string, a `$(` that runs (D376).
+        if (next !== "\\") reasons.add(BACKSLASH_IN_DOUBLE_QUOTES);
         cur += c + next;
         i++;
         continue;
@@ -113,21 +176,27 @@ function splitRaw(command: string): {
       if (c === '"') inDouble = false;
       else if (c === "`" || (c === "$" && next === "("))
         reasons.add("command substitution");
+      else if (c === "\n" || c === "\r") reasons.add(NEWLINE_IN_QUOTES);
       cur += c;
       continue;
     }
 
+    // D376: bash escapes a metacharacter after `\`; PowerShell keeps the `\` and acts on it.
+    if (c === "\\" && SHELL_META.has(next)) reasons.add(BACKSLASH_BEFORE_META);
     if (c === "\\" && BACKSLASH_ESCAPABLE.has(next)) {
       cur += c + next;
       i++;
       continue;
     }
-    if (c === "^" && next !== "") {
-      // cmd.exe escape: the next character is literal.
-      cur += c + next;
-      i++;
-      continue;
-    }
+    // D376: a caret is cmd.exe's escape, but the agent shell is bash, where it is an ordinary
+    // character — `npm test ^; rm -rf ~` is two commands. Never read with confidence.
+    if (c === "^") reasons.add(CARET);
+    // D376: ANSI-C `$'…'` (where `\'` is a quote) and locale `$"…"` quoting.
+    if (c === "$" && (next === "'" || next === '"'))
+      reasons.add(DOLLAR_QUOTING);
+    // D376: a `#` that starts a word starts a comment, which can hide an opening quote.
+    if (c === "#" && (prev === "" || COMMENT_MAY_FOLLOW.has(prev)))
+      reasons.add(COMMENT);
     if (c === "'") inSingle = true;
     else if (c === '"') inDouble = true;
     else if (c === "`" || (c === "$" && next === "("))
@@ -197,7 +266,10 @@ function dropEmpty(raw: RawSegment[], reasons: Set<string>): RawSegment[] {
 
 /**
  * Splits a command line into segments on `&&`, `||`, `;`, `|`, `&` and newlines, respecting
- * quotes and backslash / caret escapes. Redirections (`2>&1`, `&>f`, `>|`) are not separators.
+ * quotes and backslash escapes as bash reads them. Redirections (`2>&1`, `&>f`, `>|`) are not
+ * separators. Not confident (D376) wherever bash and PowerShell could read the line differently
+ * from this: a caret, `$'…'` / `$"…"`, a `#` comment, a newline inside quotes, or a backslash
+ * before a metacharacter.
  */
 export function splitCommand(command: string): SplitResult {
   const { raw, reasons } = splitRaw(command);
@@ -482,6 +554,100 @@ export function commandPrefix(segment: string): string | undefined {
   return program;
 }
 
+/* -------------------------------------------------------------------------------------------- */
+/* What an allowlist entry can never cover (D376)                                               */
+/* -------------------------------------------------------------------------------------------- */
+
+/**
+ * Whether a segment writes a file through a redirection — `>`, `>>`, `1>`, `2>`, `&>`, `>|`, `<>`,
+ * `>&file` — outside quotes and escapes, read the way the splitter reads them. Input (`<`) and a
+ * descriptor duplication or close (`2>&1`, `>&2`, `>&-`) write no file.
+ */
+function writesToFile(segment: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment.charAt(i);
+    const next = segment.charAt(i + 1);
+    if (inSingle) {
+      if (c === "'") inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (c === "\\" && next !== "") i++;
+      else if (c === '"') inDouble = false;
+      continue;
+    }
+    // A caret is an ordinary character to bash (D376), so it escapes nothing here.
+    if (c === "\\" && BACKSLASH_ESCAPABLE.has(next)) {
+      i++;
+      continue;
+    }
+    if (c === "'") inSingle = true;
+    else if (c === '"') inDouble = true;
+    else if (c === ">") {
+      let j = i + 1;
+      if (segment.charAt(j) === ">" || segment.charAt(j) === "|") j++;
+      if (segment.charAt(j) !== "&") return true;
+      // `>&N` / `>&-`: a duplication or a close, when nothing but a separator follows.
+      const dup = /^(\d+|-)(?=$|[\s;|&<>])/.exec(segment.slice(j + 1));
+      if (dup === null) return true;
+      i = j + dup[0].length;
+    }
+  }
+  return false;
+}
+
+/**
+ * D376: why an allowlist entry — a program on the PATH, run as itself — can never cover this
+ * segment, or `undefined`. A leading `NAME=value` (`NODE_OPTIONS`, `LD_PRELOAD`) loads other code
+ * into the allowed program; a program word with `/` or `\` is some other file of that name; an
+ * output redirection writes wherever it points (`npm test > ~/.bashrc`).
+ */
+function uncoverableReason(segment: string): string | undefined {
+  const words = tokenize(segment);
+  const first = words[0];
+  if (first !== undefined && ASSIGNMENT.test(first))
+    return "sets environment variables first";
+  if (first !== undefined && /[\\/]/.test(first))
+    return "runs a program by path";
+  if (writesToFile(segment)) return "redirects output to a file";
+  return undefined;
+}
+
+/**
+ * D376: programs whose prefix is never offered for Always allow — the wrappers, shells and
+ * interpreters this file already knows, and the other launchers that run whatever they are given
+ * (`.`, `source`, `npx` and kin, `tsx`, `wsl`, `ssh`). They ask every time; an entry the person
+ * types into the node's allowed commands still covers them.
+ */
+const NEVER_OFFERED: ReadonlySet<string> = new Set([
+  ...WRAPPERS,
+  ...SHELLS,
+  ...POWERSHELLS,
+  ...INTERPRETERS,
+  "cmd",
+  "nodejs",
+  "php",
+  ".",
+  "source",
+  "npx",
+  "pnpx",
+  "bunx",
+  "tsx",
+  "wsl",
+  "ssh",
+]);
+
+/** D376: `python3.12`, `pypy3`, `php8.2`, `node18` and the like. */
+const VERSIONED_INTERPRETER = /^(python|pypy|php|ruby|perl|node)[0-9.]*$/;
+
+/** Whether a prefix starts with a program in {@link NEVER_OFFERED} or a versioned interpreter. */
+function neverOffered(prefix: string): boolean {
+  const first = normalizeProgram(prefix.split(" ")[0] ?? "");
+  return NEVER_OFFERED.has(first) || VERSIONED_INTERPRETER.test(first);
+}
+
 /** Whole-word prefix match; the program name compares case-insensitively, the rest exactly. */
 function allowlistCovers(
   segment: string,
@@ -725,9 +891,11 @@ function deniedBy(segment: string): string | undefined {
 /**
  * Classifies a `run_command` line against a node's allowlist (D342: there is no "Full auto").
  *
- * `autoAllowed` only when the line is read confidently, no segment hits the DENYLIST and every
+ * `autoAllowed` only when the line is read confidently, no segment hits the DENYLIST or is
+ * uncoverable (D376: env assignments first, a path program, an output redirection) and every
  * segment is covered by an allowlist entry. `alwaysAllowPrefix` is offered only when the line is
- * confident, nothing is denied and all segments share one prefix.
+ * confident, nothing is denied or uncoverable, all segments share one prefix and that prefix does
+ * not start with a wrapper or an interpreter (`NEVER_OFFERED`).
  */
 export function classifyCommand(
   command: string,
@@ -739,11 +907,16 @@ export function classifyCommand(
     const prefix = commandPrefix(text);
     const rule = deniedBy(text);
     if (rule !== undefined) denied.add(rule);
-    const allowed = rule === undefined && allowlistCovers(text, allowlist);
+    const uncoverable = uncoverableReason(text);
+    const allowed =
+      rule === undefined &&
+      uncoverable === undefined &&
+      allowlistCovers(text, allowlist);
     return {
       text,
       ...(prefix !== undefined ? { prefix } : {}),
       ...(rule !== undefined ? { denied: rule } : {}),
+      ...(uncoverable !== undefined ? { uncoverable } : {}),
       allowed,
     };
   });
@@ -755,6 +928,11 @@ export function classifyCommand(
   const autoAllowed = clean && segments.every((s) => s.allowed);
   const prefixes = new Set(segments.map((s) => s.prefix));
   const only = prefixes.size === 1 ? [...prefixes][0] : undefined;
+  const offerable =
+    clean &&
+    segments.every((s) => s.uncoverable === undefined) &&
+    only !== undefined &&
+    !neverOffered(only);
   const result: Classification = {
     segments,
     confident: split.confident,
@@ -762,6 +940,6 @@ export function classifyCommand(
     denied: [...denied],
     autoAllowed,
   };
-  if (clean && only !== undefined) result.alwaysAllowPrefix = only;
+  if (offerable && only !== undefined) result.alwaysAllowPrefix = only;
   return result;
 }

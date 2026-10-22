@@ -1,4 +1,4 @@
-import type { Node } from '@ace/contracts';
+import { isAgentic, type Node } from '@ace/contracts';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,12 +10,14 @@ import {
 } from '@ace/ui';
 import { useContext, useState } from 'react';
 
+import { RUN_GOING_TITLE, useRunGoing } from '../runs/hooks';
+import { AgenticMenuItems, RevertStepDialog } from './AgenticCardMenu';
 import { NodeActionsContext } from './card-context';
 import { isStageKind } from './anchors';
 
 /** A card's icon button: 22px, the theme's hairline pill, its icon in the muted ink. */
 const BUTTON =
-  'nodrag nopan flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-full border border-[var(--line)] bg-[var(--surface)] p-0 text-[var(--muted)] outline-none hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] data-[state=open]:border-[#ef6b3f] data-[state=open]:text-[var(--ink)]';
+  'nodrag nopan flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-full border border-[var(--line)] bg-[var(--surface)] p-0 text-[var(--muted)] outline-none hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)] data-[state=open]:border-[#ef6b3f] data-[state=open]:text-[var(--ink)]';
 
 /**
  * PG-1.2 (D360): every card's always-visible ⚙ Settings and ⋯ More, top right. More holds the
@@ -31,9 +33,14 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
    */
   const [menuMounted, setMenuMounted] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // D382: the Revert step confirm outlives the menu that opened it.
+  const [revert, setRevert] = useState<{ projectId: string; checkpointId: string }>();
   if (actions === undefined) return null;
   const { readOnly } = actions;
   const name = node.name || 'node';
+  // D378: Open in Forge / Revert step belong to a node that works in the project, and need a router.
+  const agentic =
+    node.kind === 'agent' && isAgentic(node.config) && actions.openInDomain !== undefined;
   const moreButton = (
     <button
       type="button"
@@ -89,6 +96,13 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
                 Open in Domain
               </DropdownMenuItem>
             )}
+            {agentic && (
+              <AgenticMenuItems
+                workflowId={node.workflowId}
+                nodeId={node.id}
+                onRevert={(projectId, checkpointId) => setRevert({ projectId, checkpointId })}
+              />
+            )}
             {!readOnly && (
               <>
                 <DropdownMenuItem onSelect={() => actions.connectTo(node.id)}>
@@ -105,9 +119,10 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
                 <DropdownMenuItem onSelect={() => actions.duplicate(node.id)}>
                   Duplicate
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => actions.runFromHere(node.id)}>
-                  Run from here
-                </DropdownMenuItem>
+                <RunFromHereItem
+                  workflowId={node.workflowId}
+                  onSelect={() => actions.runFromHere(node.id)}
+                />
                 <DropdownMenuSeparator />
                 <DropdownMenuItem destructive onSelect={() => actions.remove(node.id)}>
                   Delete
@@ -119,6 +134,30 @@ export function NodeCardButtons({ node, className }: { node: Node; className?: s
       ) : (
         moreButton
       )}
+      {revert !== undefined && (
+        <RevertStepDialog
+          projectId={revert.projectId}
+          checkpointId={revert.checkpointId}
+          onClose={() => setRevert(undefined)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * [audit W-8] "Run from here" starts a new run, so while one is going it waits, saying why — a
+ * second run would go beside the first. Its own component: only an open menu subscribes to the run.
+ */
+function RunFromHereItem({ workflowId, onSelect }: { workflowId: string; onSelect: () => void }) {
+  const going = useRunGoing(workflowId);
+  return (
+    <DropdownMenuItem
+      disabled={going}
+      {...(going ? { title: RUN_GOING_TITLE } : {})}
+      onSelect={onSelect}
+    >
+      Run from here
+    </DropdownMenuItem>
   );
 }

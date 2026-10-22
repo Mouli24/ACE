@@ -33,6 +33,15 @@ export interface RunGate {
   stop(): void;
   /** FR-SYS-008: the engine is going down; the run halts `shutdown`, which is not a failure. */
   shutdown(): void;
+  /**
+   * [audit E-4] A cost cap was crossed (§2.3): nothing that has not started may start, and nothing
+   * running is cut short — a budget stops spending, it does not throw away money already spent.
+   * For good: `isPaused()` reads true, so a turn handed its provider slot hands it back (as under a
+   * pause), and `waitUntilDispatchable()` answers `false`, so it ends without a call (as under a
+   * stop). The signal is not aborted.
+   */
+  closeDispatch(): void;
+  isDispatchClosed(): boolean;
 
   /**
    * Awaited by the scheduler before it dispatches. Resolves `true` when the run may dispatch and
@@ -52,6 +61,8 @@ export function createRunGate(runId: Id): RunGate {
   const controller = new AbortController();
   let paused = false;
   let cause: AbortCause | undefined;
+  /** [audit E-4] Set by a crossed cost cap; never cleared — the run is ending. */
+  let closed = false;
 
   /** Everyone waiting for the pause to lift or for the run to be aborted. */
   let waiters: (() => void)[] = [];
@@ -86,7 +97,7 @@ export function createRunGate(runId: Id): RunGate {
     runId,
     signal: controller.signal,
 
-    isPaused: () => paused,
+    isPaused: () => paused || closed,
     isAborted: () => cause !== undefined,
     abortCause: () => cause,
 
@@ -104,11 +115,17 @@ export function createRunGate(runId: Id): RunGate {
     stop: () => abort('stopped'),
     shutdown: () => abort('shutdown'),
 
+    closeDispatch() {
+      closed = true;
+      wake();
+    },
+    isDispatchClosed: () => closed,
+
     async waitUntilDispatchable() {
-      while (paused && cause === undefined) {
+      while (paused && !closed && cause === undefined) {
         await new Promise<void>((resolve) => waiters.push(resolve));
       }
-      return cause === undefined;
+      return cause === undefined && !closed;
     },
 
     track(nodeId) {

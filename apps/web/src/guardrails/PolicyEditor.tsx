@@ -126,7 +126,7 @@ export function PolicyEditor({ policy }: { policy: GuardrailPolicy }) {
       </div>
 
       {update.error && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           {update.error.message}
         </p>
       )}
@@ -244,7 +244,7 @@ function CheckRow({
           onClick={() =>
             onChange(check.id, (current) => ({ ...current, enabled: !current.enabled }))
           }
-          className="flex cursor-pointer items-center gap-2 rounded-full text-[11px] text-[var(--muted)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="flex cursor-pointer items-center gap-2 rounded-full text-[11px] text-[var(--muted)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
         >
           <Toggle on={check.enabled} />
           enabled

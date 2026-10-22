@@ -30,7 +30,7 @@ export function SocketNotice({ status }: { status: AceSocketStatus }) {
         data-testid="socket-forbidden-origin"
         data-status={status}
         title="This page's address is not on the engine's allowed origins (settings.allowedOrigins). Add it there, then reload."
-        className="flex min-w-0 items-center gap-[6px] text-[#c94c27]"
+        className="flex min-w-0 items-center gap-[6px] text-danger"
       >
         <span aria-hidden className="h-[6px] w-[6px] shrink-0 rounded-full bg-current" />
         <span className="truncate">this address may not connect to the engine</span>

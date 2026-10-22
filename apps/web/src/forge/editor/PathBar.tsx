@@ -83,7 +83,9 @@ export function PathBar({
 }) {
   const project = useProject(projectId);
   const lines = useTouchedLines(projectId, path, touch);
-  const shown = touch !== undefined && lines !== undefined;
+  // a command's change names no lines (D378), so it shows without a span
+  const viaCommand = touch?.viaCommand === true;
+  const shown = touch !== undefined && (viaCommand || lines !== undefined);
   useClock(shown);
   // PG-3.4: the model the writing node ran on
   const model = useNodeModel(workflowId, touch?.agent.nodeId, touch?.nodeRunId);
@@ -133,8 +135,11 @@ export function PathBar({
             {touch.agent.letter}
           </span>
           <span className="min-w-0 truncate">
-            <AgentName workflowId={workflowId} agent={touch.agent} /> edited lines {lines.from}–
-            {lines.to} · {ago(touch.at)}
+            <AgentName workflowId={workflowId} agent={touch.agent} />{' '}
+            {viaCommand || lines === undefined
+              ? 'changed this file via a command'
+              : `edited lines ${lines.from}–${lines.to}`}{' '}
+            · {ago(touch.at)}
             {model !== undefined && (
               <>
                 {' · '}
@@ -153,7 +158,7 @@ export function PathBar({
         title="Format Document (Shift+Alt+F)"
         onClick={() => void formatDocument(projectId, path)}
         disabled={!FORMATTABLE.has(languageOf(path))}
-        className="flex h-[24px] shrink-0 cursor-pointer items-center whitespace-nowrap rounded-[999px] border border-[var(--line)] bg-[var(--chip)] px-[10px] font-human text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-default disabled:opacity-[0.45] disabled:hover:bg-[var(--chip)]"
+        className="flex h-[24px] shrink-0 cursor-pointer items-center whitespace-nowrap rounded-[999px] border border-[var(--line)] bg-[var(--chip)] px-[10px] font-human text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] disabled:cursor-default disabled:opacity-[0.45] disabled:hover:bg-[var(--chip)]"
       >
         Format
       </button>
@@ -163,7 +168,7 @@ export function PathBar({
 }
 
 const LINK =
-  'cursor-pointer rounded-[4px] text-[var(--ink)] underline-offset-2 outline-none hover:underline focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'cursor-pointer rounded-[4px] text-[var(--ink)] underline-offset-2 outline-none hover:underline focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * PG-3.4: the writing agent's name — a link to its node on the canvas (selected, centred, the
@@ -209,7 +214,7 @@ function FollowLink({
       className={
         mode === 'ideate'
           ? `${LINK} border-none bg-transparent p-0 font-semibold`
-          : 'flex h-[20px] shrink-0 cursor-pointer items-center rounded-full border border-[var(--line)] bg-transparent px-[7px] font-human text-[10.5px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]'
+          : 'flex h-[20px] shrink-0 cursor-pointer items-center rounded-full border border-[var(--line)] bg-transparent px-[7px] font-human text-[10.5px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]'
       }
     >
       {mode === 'ideate' ? agent.name : 'Domain'}
@@ -230,7 +235,7 @@ function RunPipeline({ workflowId }: { workflowId: string }) {
         {...(estimate === undefined ? {} : { title: estimateTitle(estimate) })}
         onClick={start}
         disabled={active || pending}
-        className="flex h-[24px] shrink-0 cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-[999px] border border-[var(--line)] bg-[var(--chip)] px-[10px] font-human text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-default disabled:opacity-[0.45] disabled:hover:bg-[var(--chip)]"
+        className="flex h-[24px] shrink-0 cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-[999px] border border-[var(--line)] bg-[var(--chip)] px-[10px] font-human text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] disabled:cursor-default disabled:opacity-[0.45] disabled:hover:bg-[var(--chip)]"
       >
         <span aria-hidden className="text-[9px] text-[#2f9e63]">
           <Icons.Play aria-hidden size={12} />

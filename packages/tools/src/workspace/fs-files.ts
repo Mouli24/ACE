@@ -101,6 +101,28 @@ function entryOf(base: string, rules: IgnoreRules, absolute: string, stats: Stat
 const byFolderThenName = (a: FileEntry, b: FileEntry): number =>
   a.kind !== b.kind ? (a.kind === 'folder' ? -1 : 1) : collator.compare(a.name, b.name);
 
+/** [audit F-8] How many entries of one folder `listFolder` stats at once. */
+const STAT_CONCURRENCY = 32;
+
+/** `fn` over `items`, at most `limit` at a time, the answers in the items' order. */
+async function mapLimited<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const answers = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const at = next;
+      next += 1;
+      answers[at] = await fn(items[at] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return answers;
+}
+
 /** `GET /files/tree`: one folder, one level (FR-GIT-003). */
 export async function listFolder(root: string, path: string): Promise<FolderListing> {
   const base = resolve(root);
@@ -111,18 +133,24 @@ export async function listFolder(root: string, path: string): Promise<FolderList
     throw new WorkspaceFsError('invalid_path', `${path} is a file, not a folder.`);
 
   const rules = createIgnoreRules(base);
-  const items: FileEntry[] = [];
-  for (const dirent of await fs.readdir(folder, { withFileTypes: true })) {
-    if (dirent.name.endsWith(SAVE_TEMP_SUFFIX)) continue;
-    const absolute = join(folder, dirent.name);
-    const rel = relOf(base, absolute);
-    if (rules.isHidden(rel)) continue;
+  const shown = (await fs.readdir(folder, { withFileTypes: true })).filter((dirent) => {
+    if (dirent.name.endsWith(SAVE_TEMP_SUFFIX)) return false;
+    const rel = relOf(base, join(folder, dirent.name));
+    if (rules.isHidden(rel)) return false;
     // a link that resolves outside the project is not shown at all (FR-GIT-008)
-    if (dirent.isSymbolicLink() && !resolveInsideSandbox(base, rel).ok) continue;
-    const entryStats = await statOrNull(absolute);
-    if (entryStats === null || (!entryStats.isFile() && !entryStats.isDirectory())) continue;
-    items.push(entryOf(base, rules, absolute, entryStats));
-  }
+    return !dirent.isSymbolicLink() || resolveInsideSandbox(base, rel).ok;
+  });
+  // a stat per entry, a bounded number at a time rather than one after another ([audit F-8])
+  const statted = await mapLimited(shown, STAT_CONCURRENCY, (dirent) =>
+    statOrNull(join(folder, dirent.name)),
+  );
+  const items: FileEntry[] = [];
+  shown.forEach((dirent, index) => {
+    const entryStats = statted[index];
+    if (entryStats === null || entryStats === undefined) return;
+    if (!entryStats.isFile() && !entryStats.isDirectory()) return;
+    items.push(entryOf(base, rules, join(folder, dirent.name), entryStats));
+  });
   items.sort(byFolderThenName);
   return { path: relOf(base, folder), items };
 }

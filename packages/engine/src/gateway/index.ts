@@ -23,10 +23,12 @@ import {
   StartRunRequestSchema,
   TryModelRequestSchema,
   UpdateProjectRequestSchema,
+  ModelCapabilitiesPatchSchema,
   UpdateProviderRequestSchema,
   UpdateWorkflowRequestSchema,
   artifactETag,
   cliPatchError,
+  maxUploadBytes,
   type Id,
   type McpServer,
   type MessageQuery,
@@ -63,8 +65,8 @@ import {
   type ProviderService,
 } from '../providers/index.js';
 import type { Auth, Repository, Scope } from '../ports/index.js';
-import type { ApprovalService } from '../approvals/index.js';
-import { createApprovalRoutes } from '../approvals/routes.js';
+import { CANNOT_ALWAYS_ALLOW, type ApprovalService } from '../approvals/index.js';
+import { cannotAlwaysAllow, createApprovalRoutes } from '../approvals/routes.js';
 import { createGuardrailRoutes, type PolicyService } from '../guardrails/index.js';
 import {
   buildRunExport,
@@ -94,10 +96,13 @@ import { createWorkspaceRoutes } from '../workspace/routes.js';
 import type { WorkspaceService } from '../workspace/service.js';
 import { createProcessRoutes } from '../processes/routes.js';
 import type { ProcessService } from '../processes/service.js';
+import { createLanguageRoutes } from '../language/routes.js';
+import type { LanguageService } from '../language/service.js';
 import { createCheckpointRoutes } from '../checkpoints/routes.js';
 import type { CheckpointService } from '../checkpoints/service.js';
 import {
   HttpError,
+  forbiddenHost,
   forbiddenOrigin,
   notFound,
   notImplemented,
@@ -106,6 +111,7 @@ import {
   unauthorized,
 } from './errors.js';
 import { readJson } from './read-json.js';
+import { BACKUP_IMPORT_MAX_BYTES, MULTIPART_OVERHEAD_BYTES, limitBody } from './body-limit.js';
 
 /**
  * The tool catalog `GET /tools` reads (round 4 §2.4). It is a narrow view rather than the concrete
@@ -139,6 +145,12 @@ export interface EngineDeps {
   graph: GraphService;
   /** The engine's own origin, always allowed in addition to `settings.allowedOrigins`. */
   selfOrigins?: string[];
+  /**
+   * [audit S-7] The `Host` values the engine answers to (`127.0.0.1:<port>`, `localhost:<port>`,
+   * `[::1]:<port>`), filled in once the real port is bound. Absent, no Host check — an app driven
+   * through `app.request(...)` has no socket and so no address of its own.
+   */
+  selfHosts?: string[];
 
   /* Round 2. Optional so a round 1 harness still builds an app without them. */
   providers?: ProviderService;
@@ -205,6 +217,8 @@ export interface EngineDeps {
   processes?: ProcessService;
   /** `/projects/:id/checkpoints/*`: review, keep and revert agents' changes (D300). */
   checkpoints?: CheckpointService;
+  /** `/projects/:id/language/:language`: Forge's Python IntelliSense through Pyright. */
+  language?: LanguageService;
 
   /** `/bench/*`: ACE Bench's tasks, experiments, blind export, scores and report (PG-5.6). */
   bench?: BenchService;
@@ -239,6 +253,27 @@ export async function isOriginAllowed(
   if (origin === undefined || origin === '') return true;
   const settings = await deps.repository.settings.get(deps.scope);
   return settings.allowedOrigins.includes(origin) || (deps.selfOrigins ?? []).includes(origin);
+}
+
+/**
+ * [audit S-7] Is `host` (a request's `Host` header) one of the engine's own addresses? The second
+ * layer against DNS rebinding: a page on `evil.example` that re-points its name at 127.0.0.1 is
+ * same-origin to itself, sends no `Origin` on a GET and so passes the Origin rule — but its `Host`
+ * still says `evil.example`. One rule for REST (`hostGuard`) and the WebSocket upgrade. With no
+ * `selfHosts` there is nothing to compare against and every host passes.
+ */
+export function isHostAllowed(selfHosts: readonly string[] | undefined, host: string | undefined): boolean {
+  if (selfHosts === undefined) return true;
+  return host !== undefined && selfHosts.includes(host.toLowerCase());
+}
+
+/** [audit S-7]: refuse a request whose `Host` is not the engine's — before CORS answers anything. */
+function hostGuard(deps: EngineDeps): MiddlewareHandler<{ Variables: EngineVariables }> {
+  return async (c, next) => {
+    const host = c.req.header('Host');
+    if (!isHostAllowed(deps.selfHosts, host)) throw forbiddenHost(host ?? '');
+    return next();
+  };
 }
 
 /**
@@ -460,6 +495,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   });
 
   app.use('*', requestId());
+  app.use('*', hostGuard(deps));
   app.use('*', corsLayer(deps));
   app.use('*', originGuard(deps));
   app.use('*', authGuard(deps));
@@ -557,6 +593,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     await deps.processes?.stopProject(id);
     // Release the records (up to ~40 MB of output) only after the stop and the delete.
     deps.processes?.forgetProject(id);
+    await deps.language?.stopProject(id);
     return c.body(null, 204);
   });
 
@@ -709,6 +746,19 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.post('/providers/:id/refresh-models', async (c) =>
     c.json(await providers(c).refreshModels(c.req.param('id'))),
   );
+
+  /**
+   * D380 (agentic nodes P2): the person says whether a discovered model takes tools, and how big
+   * its window is. Kept across a refresh. The model id is URL-encoded — ids carry `/` and `:`.
+   */
+  api.patch('/providers/:id/models/:modelId', async (c) => {
+    const patch = ModelCapabilitiesPatchSchema.parse(await readJson(c));
+    const id = c.req.param('id');
+    const modelId = c.req.param('modelId');
+    const model = await providers(c).setModelCapabilities(id, modelId, patch);
+    if (model === null) throw notFound(`model ${modelId} of provider ${id}`);
+    return c.json(model);
+  });
 
   /* ------------------------------------------- models on this machine (PG-1.4, D359) */
 
@@ -881,7 +931,14 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
 
   /* -------------------------------------------------------------- artifacts (R4) */
 
-  api.post('/artifacts', async (c) => {
+  // [audit S-9]: refused at the body's size, before the multipart parse holds it all; the service
+  // still checks the file itself against the same limit.
+  const uploadLimit = limitBody(
+    async () => maxUploadBytes((await deps.repository.settings.get(deps.scope)).maxUploadMb),
+    MULTIPART_OVERHEAD_BYTES,
+  );
+
+  api.post('/artifacts', uploadLimit, async (c) => {
     const body = await c.req.parseBody();
     const file = body[ARTIFACT_UPLOAD_FIELD];
     if (!(file instanceof File)) {
@@ -917,11 +974,17 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     if (found === null) throw notFound(`artifact ${c.req.param('id')}`);
     const { artifact, bytes } = found;
 
+    // [audit S-6]: the bytes are whatever a model or an upload produced, served on the engine's own
+    // origin with the token in the URL. Never sniffed into something else, never run as a page if
+    // opened as one (an <img>/<audio>/<video> ignores a subresource's CSP), never kept in a cache.
     const headers: Record<string, string> = {
       'Content-Type': artifact.mime,
       'Content-Disposition': `attachment; filename="${safeFilename(artifact.name)}"`,
       ETag: artifactETag(artifact.hash),
       'Accept-Ranges': ARTIFACT_ACCEPT_RANGES,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'Cache-Control': 'no-store',
     };
 
     // Range → 206 with the requested slice, so audio and video can be seeked (§2.1, FR-MM-009).
@@ -1045,7 +1108,9 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   });
 
   const decideChatApproval = (kind: 'approve' | 'reject') => async (c: Context) => {
-    const { note } = ApprovalDecisionRequestSchema.parse(await readJson(c));
+    const { note, always } = ApprovalDecisionRequestSchema.parse(await readJson(c));
+    // D376: Always allow saves an agentic node's command prefix; a chat asks about no command.
+    if (always === true) throw cannotAlwaysAllow(CANNOT_ALWAYS_ALLOW);
     try {
       return c.json(
         await chat(c).decideApproval(
@@ -1114,6 +1179,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createMemoryRoutes(deps.memory));
   api.route('/', createUsageRoutes(deps.trace, deps.usage));
   api.route('/', createTemplateRoutes(deps.templates));
+  // [audit S-9]: a backup zip's upload is capped before the router parses it.
+  api.use('/backup/import', limitBody(() => BACKUP_IMPORT_MAX_BYTES, MULTIPART_OVERHEAD_BYTES));
   api.route('/', createBackupRoutes(deps.backup));
   /* IDE (D299): Forge's project files, inside the same middleware. */
   api.route('/', createWorkspaceRoutes(deps.workspace));
@@ -1121,6 +1188,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createProcessRoutes(deps.processes));
   /* IDE (D300): checkpoints of agents' changes, inside the same middleware. */
   api.route('/', createCheckpointRoutes(deps.checkpoints));
+  /* Forge's Python IntelliSense, inside the same middleware. */
+  api.route('/', createLanguageRoutes(deps.language));
   /* PG-5.6: ACE Bench (Arch §20.2), inside the same middleware. */
   api.route('/', createBenchRoutes(deps.bench));
 

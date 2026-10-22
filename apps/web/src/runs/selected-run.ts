@@ -1,10 +1,12 @@
-import type { Id, Run, RunSummary } from '@ace/contracts';
+import type { Id, RunSummary } from '@ace/contracts';
 import { useCallback, useEffect, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 
-import { api } from '../app/api';
+import { adoptRun, isLiveRun } from './adopt-run';
 import { useRunStore } from './run-store';
 import { useRuns } from './hooks';
+
+export { isLiveRun };
 
 /**
  * PG-3.2: one selected run for the workflow, in every mode. It lives in the URL (`?run=`), so a
@@ -28,13 +30,6 @@ export interface SelectedRun {
   /** Select a run (`undefined` goes back to the default), keeping the rest of the query. */
   select(runId: Id | 'new' | undefined): void;
 }
-
-/** A run that still takes messages and controls: going, paused, or blocked mid-run (D305, D323). */
-export const isLiveRun = (run: Pick<Run, 'status'> & { blockedReason?: unknown }): boolean =>
-  run.status === 'RUNNING' ||
-  run.status === 'PAUSED' ||
-  run.status === 'PREFLIGHT' ||
-  (run.status === 'BLOCKED' && run.blockedReason !== undefined);
 
 export function useSelectedRun(workflowIdArg?: Id): SelectedRun {
   const params = useParams();
@@ -93,36 +88,16 @@ export function useSelectedRun(workflowIdArg?: Id): SelectedRun {
  */
 export function useAdoptActiveRun(workflowId: Id | undefined, mode?: string): void {
   const { runId } = useSelectedRun(workflowId);
-  const adopt = useRunStore((store) => store.adopt);
 
   useEffect(() => {
     if (workflowId === undefined || runId === undefined) return;
-    const startInFlight = (): boolean => {
-      const store = useRunStore.getState();
-      return store.workflowId === workflowId && store.active && store.runId === undefined;
-    };
-    if (startInFlight()) return;
     let cancelled = false;
-    void (async () => {
-      try {
-        const run = await api().getRun(runId);
-        if (cancelled || startInFlight()) return;
-        const store = useRunStore.getState();
-        const same = store.workflowId === workflowId && store.runId === run.id;
-        if (same && (store.status === run.status || (store.active && isLiveRun(run)))) return;
-        const [nodeRuns, approvals] = await Promise.all([
-          api().listNodeRuns(run.id),
-          api().listApprovals(run.id),
-        ]);
-        if (!cancelled && !startInFlight()) adopt(workflowId, run, nodeRuns, approvals);
-      } catch {
-        // A run that cannot be read (deleted, or the engine away) leaves the overlay as it is.
-      }
-    })();
+    // [audit W-1] the body is `adoptRun`, which a failed start also uses to put this run back
+    void adoptRun(workflowId, runId, () => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [workflowId, runId, mode, adopt]);
+  }, [workflowId, runId, mode]);
 }
 
 /**

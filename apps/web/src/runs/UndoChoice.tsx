@@ -14,7 +14,7 @@ export function undoReasonText(message: string): string {
 }
 
 const BUTTON =
-  'flex h-[28px] shrink-0 cursor-pointer items-center rounded-[8px] border px-[12px] text-[12px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-default disabled:opacity-60';
+  'flex h-[28px] shrink-0 cursor-pointer items-center rounded-[8px] border px-[12px] text-[12px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-default disabled:opacity-60';
 
 /**
  * The choice a stopped writer offers (PG-2.4, D361): "Run without undo" — once, for this run or

@@ -150,6 +150,7 @@ export const TRACE_ENTRY_KIND_BY_EVENT_TYPE = {
   'run.config': 'run_event',
   'run.blocked': 'run_event',
   'run.parked': 'run_event',
+  'node.turn': 'node_run',
 } as const satisfies Record<PersistedRunEventType, TraceEntryKind>;
 
 /**

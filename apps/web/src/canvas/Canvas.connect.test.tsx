@@ -6,6 +6,7 @@ import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { useViewportStore } from '../app/stores/viewport';
 import { createNode } from '../nodes/factory';
+import { useRunStore } from '../runs/run-store';
 import { db, installMockServer, renderWithQuery } from '../test/app';
 import { peekGraphSync } from '../workflows/sync-registry';
 import { Canvas } from './Canvas';
@@ -134,6 +135,19 @@ describe('PG-1.2 every card has always-visible Settings and More (D360)', () => 
     for (const item of ['Connect to…', 'Duplicate', 'Run from here', 'Delete']) {
       expect(within(menu).getByRole('menuitem', { name: item })).toBeVisible();
     }
+  });
+
+  it('[audit W-8] while a run is going, Run from here waits and says why', async () => {
+    const { workflow, nodes } = seed(['agent']);
+    await mount(workflow.id);
+    act(() => useRunStore.setState({ workflowId: workflow.id, runId: 'run1', active: true }));
+    await userEvent.click(moreOf(nodes[0]!.id));
+    const item = within(await screen.findByRole('menu')).getByRole('menuitem', {
+      name: 'Run from here',
+    });
+    expect(item).toHaveAttribute('aria-disabled', 'true');
+    expect(item).toHaveAttribute('title', 'A run is going — stop it first');
+    act(() => useRunStore.getState().reset());
   });
 
   it('More → Duplicate adds a copy; More → Delete removes the node', async () => {

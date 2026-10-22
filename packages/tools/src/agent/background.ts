@@ -147,7 +147,13 @@ export function createBackgroundProcesses(
         exited,
       };
       processes.set(processId, tracked);
-      const watch = options.observer?.started({ nodeId, command, cwd, background: true });
+      const watch = options.observer?.started({
+        nodeId,
+        command,
+        cwd,
+        background: true,
+        processId,
+      });
 
       const end = (code: number | null, failed = false): void => {
         if (!tracked.running) return;

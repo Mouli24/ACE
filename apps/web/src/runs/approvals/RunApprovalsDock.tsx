@@ -17,16 +17,21 @@ export function RunApprovalsDock({
   runId,
   revision,
   floating = false,
+  hideCommands = false,
   className,
 }: {
   runId: Id | undefined;
   revision?: number;
   /** Over the page, bottom right (Forge); otherwise in the flow (Domain). */
   floating?: boolean;
+  /** Command approvals are pinned elsewhere (Forge's Terminal panel), so they are not repeated. */
+  hideCommands?: boolean;
   className?: string;
 }) {
   const approvals = useApprovals(runId, revision);
-  const requests = approvals.data ?? [];
+  const requests = (approvals.data ?? []).filter(
+    (request) => !(hideCommands && request.command !== undefined),
+  );
   if (runId === undefined || requests.length === 0) return null;
   return (
     <section

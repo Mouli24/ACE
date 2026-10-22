@@ -6,6 +6,7 @@ import {
   defaultExecutionSettings,
   defaultRouting,
   derivePorts,
+  newAgentWorkspace,
   type Node,
   type NodeKind,
   type NodePortSource,
@@ -72,6 +73,8 @@ function defaultConfig(kind: CanvasNodeKind): NodePortSource['config'] {
         knowledgeBaseIds: [],
         memory: { enabled: false },
         skillIds: [],
+        // agentic nodes Phase 2: a new Agent can read and edit project files (existing nodes stay Off)
+        workspace: newAgentWorkspace(),
       };
     case 'model':
       return { inputTypes: ['text'], outputTypes: ['text'], execution: defaultExecutionSettings() };

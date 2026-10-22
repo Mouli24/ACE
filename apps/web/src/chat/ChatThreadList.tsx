@@ -1,12 +1,14 @@
 import type { ChatThread } from '@ace/contracts';
 import { cn, Icons } from '@ace/ui';
+import { useState } from 'react';
 
+import { ConfirmDelete } from './ConfirmDelete';
 import { useDeleteThread } from './useChat';
 
 /** A 24px pill in the theme's tokens; the focus ring is the theme's orange. */
 const PILL =
   'flex h-[24px] shrink-0 items-center rounded-full border text-[11px] font-semibold text-[var(--ink)]';
-const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * The thread switcher for one node's session (FR-CHAT-004, D285): start a new thread, pick an
@@ -28,6 +30,8 @@ export function ChatThreadList({
   onNew: () => void;
 }) {
   const del = useDeleteThread(nodeId);
+  /** [audit W-9] the thread whose delete is being asked about */
+  const [confirming, setConfirming] = useState<{ id: string; title: string }>();
 
   return (
     <div
@@ -57,7 +61,8 @@ export function ChatThreadList({
                 key={thread.id}
                 className={cn(
                   PILL,
-                  'gap-[4px] pl-[9px] pr-[6px]',
+                  // [audit W-9] the × is a 24 px target; the pill keeps its look
+                  'gap-[4px] pl-[9px] pr-[2px]',
                   active
                     ? 'border-[var(--ink)] bg-[var(--surface)]'
                     : 'border-[var(--line)] bg-transparent',
@@ -83,10 +88,10 @@ export function ChatThreadList({
                   aria-label={`Delete chat ${title}`}
                   data-testid={`chat-delete-${thread.id}`}
                   // a session showing it falls back to the node's latest thread (useDeleteThread)
-                  onClick={() => del.mutate(thread.id)}
+                  onClick={() => setConfirming({ id: thread.id, title })}
                   className={cn(
                     FOCUS,
-                    'flex h-[16px] w-[16px] cursor-pointer items-center justify-center rounded-full text-[var(--muted)] hover:text-[#c94c27]',
+                    '-my-px flex h-[24px] w-[24px] cursor-pointer items-center justify-center rounded-full text-[var(--muted)] hover:text-danger',
                   )}
                 >
                   <Icons.X aria-hidden size={10} />
@@ -95,6 +100,18 @@ export function ChatThreadList({
             );
           })}
         </ul>
+      )}
+      {confirming !== undefined && (
+        <ConfirmDelete
+          title="Delete this chat?"
+          description={`“${confirming.title}” and every message in it are deleted. This cannot be undone.`}
+          confirmLabel="Delete chat"
+          onCancel={() => setConfirming(undefined)}
+          onConfirm={() => {
+            del.mutate(confirming.id);
+            setConfirming(undefined);
+          }}
+        />
       )}
     </div>
   );

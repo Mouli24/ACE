@@ -56,7 +56,7 @@ function PermissionChips({ permissions }: { permissions: ToolPermissions }) {
         </span>
       ))}
       {destructive && (
-        <span className={`${CHIP_CLASS} bg-[#c94c271f] text-[#c94c27]`}>destructive</span>
+        <span className={`${CHIP_CLASS} bg-[#c94c271f] text-danger`}>destructive</span>
       )}
     </span>
   );
@@ -66,11 +66,14 @@ export function AgentToolsSection({
   tools,
   onChange,
   exclude = [],
+  hideMaxToolCalls = false,
 }: {
   tools: ToolsConfig;
   onChange: (tools: ToolsConfig) => void;
   /** Registry tools not listed here because something else toggles them (the modal's skills). */
   exclude?: readonly string[];
+  /** Workspace access replaces the call cap with Max turns (D342). */
+  hideMaxToolCalls?: boolean;
 }) {
   const registry = useTools();
 
@@ -155,12 +158,14 @@ export function AgentToolsSection({
         )}
       </div>
 
-      <NumberField
-        label="Max tool calls"
-        value={tools.maxToolCalls}
-        range={MAX_TOOL_CALLS_RANGE}
-        onCommit={(maxToolCalls) => onChange({ ...tools, maxToolCalls })}
-      />
+      {!hideMaxToolCalls && (
+        <NumberField
+          label="Max tool calls"
+          value={tools.maxToolCalls}
+          range={MAX_TOOL_CALLS_RANGE}
+          onCommit={(maxToolCalls) => onChange({ ...tools, maxToolCalls })}
+        />
+      )}
 
       <AllowedDomainsEditor
         domains={tools.allowedDomains}
@@ -228,7 +233,7 @@ function AllowedDomainsEditor({
               <button
                 type="button"
                 aria-label={`Remove ${host}`}
-                className="cursor-pointer border-none bg-transparent p-0 text-[10px] text-[var(--muted)] outline-none hover:text-[#c94c27] focus-visible:text-[#c94c27]"
+                className="cursor-pointer border-none bg-transparent p-0 text-[10px] text-[var(--muted)] outline-none hover:text-danger focus-visible:text-danger"
                 onClick={() => onChange(domains.filter((each) => each !== host))}
               >
                 <Icons.X aria-hidden size={12} />

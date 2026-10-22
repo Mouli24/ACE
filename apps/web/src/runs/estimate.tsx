@@ -136,7 +136,7 @@ export function EstimateSummary({
               .join(' · ')}
       </p>
       {over && (
-        <p role="alert" className="text-[#c94c27]" data-testid="run-estimate-over">
+        <p role="alert" className="text-danger" data-testid="run-estimate-over">
           At most this run could cost more than is left; it halts when a cap is reached.
         </p>
       )}

@@ -1,4 +1,4 @@
-import type { ProviderType } from '@ace/contracts';
+import type { ProviderType, ReasoningEffort } from '@ace/contracts';
 
 import claudeLogo from './logos/claude.svg';
 import customLogo from './logos/custom.svg';
@@ -26,7 +26,6 @@ interface ProviderLook {
   white?: boolean;
 }
 
-export const PLABEL: Partial<Record<ThemeProvider, string>> = { Custom: 'Custom provider' };
 const CL: ProviderLook = {
   c: '#d97757',
   ink: '#c2603f',
@@ -139,25 +138,17 @@ export function themeProviderOf(type: ProviderType | null | undefined): {
   }
 }
 
-export const CTYPES: ReadonlyArray<readonly [ConnectionType, string, string]> = [
-  [
-    'OpenAI compatible',
-    'Any endpoint that speaks the OpenAI API — base URL plus API key.',
-    customLogo,
-  ],
-  ['Ollama', 'Models served by Ollama on your machine or a server.', ollamaLogo],
-];
 export const EFFORT = ['Default', 'Low', 'Medium', 'High', 'XHigh', 'Max'] as const;
-export const PERMS: Record<string, string> = {
-  'Read only': 'This agent can read the workspace but cannot change files.',
-  'Full access (read + write)':
-    'This agent can read the workspace and change files, within the run safety level you picked.',
-};
-export const HARNESS: Record<string, string> = {
-  Researcher: 'Finds sources, ranks options, and hands a cited brief to the next stage.',
-  Writer: 'Turns a brief into a draft that follows the project’s constraints.',
-  Reviewer: 'Combines critique, review, QA, and verification into one evidence-first role.',
-  Custom: 'Write your own role prompt, or expand one or two sentences into an editable prompt.',
+/**
+ * D389: the theme's effort levels on the contract's `REASONING_EFFORTS`, in the same order. Only the
+ * theme's `XHigh` is spelled out, as "Extra high"; `EFFORT[0]` ("Default") is no setting at all.
+ */
+export const EFFORT_LABELS: Record<ReasoningEffort, string> = {
+  low: EFFORT[1],
+  medium: EFFORT[2],
+  high: EFFORT[3],
+  xhigh: 'Extra high',
+  max: EFFORT[5],
 };
 export const SKILLS: ReadonlyArray<readonly [string, string, string]> = [
   ['web', 'Web search', 'Look up live sources and trends'],
@@ -166,8 +157,6 @@ export const SKILLS: ReadonlyArray<readonly [string, string, string]> = [
   ['cite', 'Citations', 'Attach a source to every claim'],
 ];
 
-/** Drops a trailing "(…)" from a model label. */
-export const short = (m: string) => m.replace(/\s*\(.*\)$/, '');
 /** `1.23M`, `45.6k`, `812`. */
 export const fmt = (n: number) =>
   n >= 1e6
@@ -198,12 +187,6 @@ export const PAL_D = {
 /** The editor's active-line band. */
 export const BAND_L = '#f7f3ef';
 export const BAND_D = '#201e1c';
-
-/** A file's icon colour, by extension. */
-export const fileIconColor = (path: string): string =>
-  (({ ts: '#1f97a3', md: '#ef6b3f', json: '#f2c14e' }) as Record<string, string>)[
-    path.split('.').pop() ?? ''
-  ] ?? 'var(--iconLine)';
 
 /** Agent colours, assigned by agent order. */
 export const AGENT_COLORS = ['#ef6b3f', '#7a62d6', '#1f97a3'] as const;

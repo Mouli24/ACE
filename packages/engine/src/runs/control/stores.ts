@@ -20,7 +20,7 @@ import type {
   Verdict,
 } from '@ace/contracts';
 
-import type { Repository, Scope } from '../../ports/index.js';
+import type { Repository, RunStatusGuard, Scope } from '../../ports/index.js';
 
 /**
  * The slice of the store the run controls need, and the patch fields they write.
@@ -36,7 +36,8 @@ import type { Repository, Scope } from '../../ports/index.js';
 /** `RunPatch` as the controls need it. The four round-3 fields are the ones the port still lacks. */
 export interface ControlRunPatch {
   status?: RunState;
-  haltReason?: HaltReason;
+  /** `null` clears it when a reopen makes the run RUNNING again (D81, D388). */
+  haltReason?: HaltReason | null;
   preflightIssues?: ValidationIssue[];
   totals?: Usage;
   endedAt?: Timestamp;
@@ -52,8 +53,8 @@ export interface ControlRunPatch {
   pausedAt?: Timestamp | null;
   /** `allowedRunActions(status)`, rewritten on every status change so the UI never guesses (D76). */
   allowedActions?: RunAction[];
-  /** Set only alongside `haltReason: 'budget_exceeded'` (D80). */
-  budgetHalt?: BudgetHalt;
+  /** Set only alongside `haltReason: 'budget_exceeded'` (D80); `null` clears it with it. */
+  budgetHalt?: BudgetHalt | null;
   /** Set once, on the run a restart creates (FR-CTL-004). */
   restartedFromRunId?: Id;
 
@@ -81,7 +82,8 @@ export interface ControlNodeRunPatch {
 export interface ControlRunStore {
   get(runId: Id): Promise<Run | null>;
   create(run: Run): Promise<Run>;
-  update(runId: Id, patch: ControlRunPatch): Promise<Run | null>;
+  /** With `guard`, a compare-and-set on the status: `null` when it had moved on [audit E-5]. */
+  update(runId: Id, patch: ControlRunPatch, guard?: RunStatusGuard): Promise<Run | null>;
   /** The workflow's runs, newest first — what Start from node walks back through (D83). */
   recentForWorkflow(workflowId: Id, limit: number): Promise<Run[]>;
 }
@@ -102,7 +104,7 @@ interface RunRows {
   create(scope: Scope, run: Run): Promise<Run>;
   get(scope: Scope, id: Id): Promise<Run | null>;
   listByWorkflow(scope: Scope, workflowId: Id, page: CursorQuery): Promise<Page<Run>>;
-  update(scope: Scope, id: Id, patch: ControlRunPatch): Promise<Run | null>;
+  update(scope: Scope, id: Id, patch: ControlRunPatch, guard?: RunStatusGuard): Promise<Run | null>;
 }
 
 interface NodeRunRows {
@@ -116,7 +118,7 @@ export function runStoreFor(rows: RunRows, scope: Scope): ControlRunStore {
   return {
     get: (runId) => rows.get(scope, runId),
     create: (run) => rows.create(scope, run),
-    update: (runId, patch) => rows.update(scope, runId, patch),
+    update: (runId, patch, guard) => rows.update(scope, runId, patch, guard),
     recentForWorkflow: async (workflowId, limit) =>
       (await rows.listByWorkflow(scope, workflowId, { limit })).items,
   };

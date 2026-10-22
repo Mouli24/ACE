@@ -12,7 +12,15 @@ import { queryKeys } from '../../workflows/query-keys';
 import { logOutput } from '../panel/output-store';
 import { EMPTY_EDITOR, needsSaveAll, replaceablePreview, useEditorStore } from './editor-store';
 import { languageOf } from './languages';
-import { disposeModel, editorFor, getModel, markSaved, moveModels, replaceContent } from './models';
+import {
+  disposeModel,
+  disposeProject,
+  editorFor,
+  getModel,
+  markSaved,
+  moveModels,
+  replaceContent,
+} from './models';
 
 /** How a model tells the store its buffer is (un)saved. */
 export const dirtyHandler =
@@ -28,7 +36,8 @@ export const dirtyHandler =
 export function openFile(
   projectId: string,
   path: string,
-  options: { preview?: boolean } = {},
+  /** `focus: false` leaves the keyboard where it is (a Space preview, [audit F-11]). */
+  options: { preview?: boolean; focus?: boolean } = {},
 ): void {
   const before = useEditorStore.getState().projects[projectId] ?? EMPTY_EDITOR;
   const replaced =
@@ -47,6 +56,16 @@ export function openFile(
 export function closeFiles(projectId: string, paths: readonly string[]): void {
   useEditorStore.getState().closeMany(projectId, paths);
   for (const path of paths) disposeModel(projectId, path);
+}
+
+/**
+ * [audit F-13] A deleted project's editor goes with it — its tabs, unsaved buffers and models — so
+ * none of it stays alive and closing the browser tab stops asking about its unsaved text. For the
+ * project delete to call once the engine has deleted the project.
+ */
+export function forgetProject(projectId: string): void {
+  useEditorStore.getState().forget(projectId);
+  disposeProject(projectId);
 }
 
 /** A file or folder was renamed or moved in the Explorer: tabs, models and the tree follow it, revealed. */
@@ -145,11 +164,19 @@ async function saveOnce(
   if (file === undefined || model === undefined || file.baseVersion === undefined || file.saving)
     return false;
   if (!file.dirty && !file.deletedOnDisk) return true;
+  if (file.notText !== undefined) {
+    // [audit F-5] never a text save over a file the disk holds as binary or too large
+    logOutput(projectId, 'warn', `${path} is no longer a text file on disk; nothing was saved.`);
+    return false;
+  }
   if (file.conflict !== undefined) {
+    // [audit F-4] the choices the file's conflict bar offers, and no others
     logOutput(
       projectId,
       'warn',
-      `${path} changed on disk — choose Compare, Take theirs or Keep mine first.`,
+      file.conflict === 'deleted'
+        ? `${path} was deleted on disk — choose Keep mine or Discard and close first.`
+        : `${path} changed on disk — choose Compare, Take theirs or Keep mine first.`,
     );
     return false;
   }

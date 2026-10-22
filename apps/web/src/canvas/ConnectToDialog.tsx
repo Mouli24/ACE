@@ -20,7 +20,7 @@ import {
 } from './interactions/ports';
 
 const ROW =
-  'flex w-full cursor-pointer items-center justify-between gap-3 rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-2 text-left text-[13px] text-[var(--ink)] outline-none hover:border-[#ef6b3f] hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]';
+  'flex w-full cursor-pointer items-center justify-between gap-3 rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-2 text-left text-[13px] text-[var(--ink)] outline-none hover:border-[#ef6b3f] hover:bg-[var(--hover)] focus-visible:border-[var(--focus)]';
 
 /**
  * PG-1.1 (D350): the node menu's "Connect to…" — for a trackpad or a touch screen, where drawing a

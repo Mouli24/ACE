@@ -112,12 +112,12 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
 
       {memory.isPending && <p className={EMPTY}>Loading memory…</p>}
       {memory.isError && (
-        <p role="alert" className="m-0 text-[12px] text-[#c94c27]">
+        <p role="alert" className="m-0 text-[12px] text-danger">
           Could not load memory: {memory.error.message}
         </p>
       )}
       {(remove.isError || clear.isError) && (
-        <p role="alert" className="m-0 text-[12px] text-[#c94c27]">
+        <p role="alert" className="m-0 text-[12px] text-danger">
           Could not delete: {(remove.error ?? clear.error)?.message}
         </p>
       )}
@@ -181,7 +181,7 @@ function AgentMemory({ node }: { node: Extract<Node, { kind: 'agent' }> }) {
                     aria-label={`Delete ${entry.key}`}
                     data-testid={`memory-delete-${entry.key}`}
                     onClick={() => setPending({ kind: 'one', entry })}
-                    className="grid h-7 w-7 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                    className="grid h-7 w-7 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]"
                   >
                     <Icons.X aria-hidden size={12} />
                   </button>

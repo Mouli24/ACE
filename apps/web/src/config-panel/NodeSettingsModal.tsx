@@ -43,10 +43,10 @@ const CHIP_CLASS =
   'shrink-0 rounded-[4px] px-1.5 py-0.5 font-machine text-[8.5px] font-medium tracking-[0.08em]';
 
 /** The theme's focus ring for its own buttons: the accent, 2px. */
-const FOCUS_CLASS = 'outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const FOCUS_CLASS = 'outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /** "Remove node from canvas": the theme's destructive text button (11.5px / 600, #c94c27). */
-const REMOVE_CLASS = `h-7 cursor-pointer self-start border-none bg-transparent px-0.5 text-[11.5px] font-semibold text-[#c94c27] ${FOCUS_CLASS}`;
+const REMOVE_CLASS = `h-7 cursor-pointer self-start border-none bg-transparent px-0.5 text-[11.5px] font-semibold text-danger ${FOCUS_CLASS}`;
 
 interface Chip {
   label: string;

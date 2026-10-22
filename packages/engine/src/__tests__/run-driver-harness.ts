@@ -17,6 +17,8 @@ import {
   type Run,
 } from '@ace/contracts';
 
+import type { BudgetService } from '../budgets/index.js';
+import type { PolicyService } from '../guardrails/policy-service.js';
 import {
   createDomainRegistry,
   createDomainService,
@@ -196,6 +198,10 @@ export async function createRunDriverHarness(
     onCancelPending?: (runId: string) => void;
     /** D300: what wraps each run in a checkpoint. */
     checkpoints?: CheckpointRecorder;
+    /** FR-GRD-008: the cost point, built over the harness's store. Absent, nothing is budgeted. */
+    budgets?: (repository: FakeRepository) => BudgetService;
+    /** The policy each node is judged against — what carries a run's cost checks. */
+    policies?: PolicyService;
   } = {},
 ): Promise<RunDriverHarness> {
   const shared = options.repository !== undefined;
@@ -352,6 +358,8 @@ export async function createRunDriverHarness(
     tokenBatchMs: 0,
     domains,
     ...(options.checkpoints === undefined ? {} : { checkpoints: options.checkpoints }),
+    ...(options.budgets === undefined ? {} : { budgets: options.budgets(repository) }),
+    ...(options.policies === undefined ? {} : { policies: options.policies }),
   });
 
   const controls = createRunControls({

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { asMonaco, createFakeMonaco } from '../../test/fake-monaco';
 import {
   disposeModel,
+  disposeProject,
   ensureModel,
   fileUri,
   getModel,
@@ -13,6 +14,7 @@ import {
   pathOfUri,
   replaceContent,
   resetModels,
+  setActiveEditor,
   setMonaco,
 } from './models';
 
@@ -81,6 +83,60 @@ describe('D299 one Monaco model per open file', () => {
     expect(target?.getValue()).toBe('edited');
     target?.setValue('edited more');
     expect(moved).toHaveBeenLastCalledWith(true);
+  });
+});
+
+describe('[audit F-2] the disk’s text lands as an edit, never a reset', () => {
+  it('Take theirs can be undone back to the person’s text, which is unsaved again', () => {
+    const dirty = vi.fn();
+    const model = ensureModel(P, 'a.ts', 'one', 'plaintext', dirty);
+    model.setValue('mine');
+    replaceContent(P, 'a.ts', 'theirs');
+    expect(model.getValue()).toBe('theirs');
+    expect(dirty).toHaveBeenLastCalledWith(false);
+    model.undo();
+    expect(model.getValue()).toBe('mine');
+    expect(dirty).toHaveBeenLastCalledWith(true);
+  });
+
+  it('the editor showing the file keeps its cursor and scroll', () => {
+    const fake = createFakeMonaco();
+    setMonaco(asMonaco(fake));
+    const model = ensureModel(P, 'a.ts', 'one\ntwo', 'plaintext', () => undefined);
+    const editor = fake.editor.create();
+    editor.setModel(model);
+    editor.line = 7;
+    setActiveEditor(editor as never);
+    replaceContent(P, 'a.ts', 'one\ntwo\nthree');
+    expect(editor.restoreViewState).toHaveBeenCalledWith({ line: 7 });
+  });
+
+  it('takes the disk’s line endings, so the next save writes them', () => {
+    const model = ensureModel(P, 'a.ts', 'a\nb', 'plaintext', () => undefined);
+    replaceContent(P, 'a.ts', 'a\r\nb\r\nc');
+    expect(model.getValue()).toBe('a\r\nb\r\nc');
+    expect(model.getEOL()).toBe('\r\n');
+  });
+});
+
+describe('[audit F-13] a deleted project’s models go', () => {
+  it('disposes every model of the project, and only those', () => {
+    const closed = vi.fn();
+    const off = onRegistryChange((projectId, path, open) => {
+      if (!open) closed(projectId, path);
+    });
+    const a = ensureModel(P, 'a.ts', 'x', 'plaintext', () => undefined);
+    const b = ensureModel(P, 'src/b.ts', 'y', 'plaintext', () => undefined);
+    const other = ensureModel('p2', 'a.ts', 'z', 'plaintext', () => undefined);
+    disposeProject(P);
+    off();
+    expect(a.isDisposed() && b.isDisposed()).toBe(true);
+    expect(getModel(P, 'a.ts')).toBeUndefined();
+    expect(other.isDisposed()).toBe(false);
+    expect(closed.mock.calls).toEqual([
+      [P, 'a.ts'],
+      [P, 'src/b.ts'],
+    ]);
   });
 });
 

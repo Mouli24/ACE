@@ -129,7 +129,7 @@ function ChatSocket() {
   return null;
 }
 
-/** Render inside a router (the aside's "Send to Forge →" navigates) with the location probe. */
+/** Render inside a router (the aside's links navigate) with the location probe. */
 export function renderChat(ui: ReactElement): RenderResult {
   return render(
     <QueryClientProvider client={queryClient}>

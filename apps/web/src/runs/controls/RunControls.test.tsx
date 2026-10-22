@@ -180,6 +180,78 @@ describe('FR-ERR-003/004, FR-CTL-005, FR-EXE-013 the node-level controls', () =>
       'data-disabled',
     );
   });
+
+  it('[audit W-8] while a run is going, Start from this node waits and says why', async () => {
+    const user = userEvent.setup();
+    render(
+      <NodeRunMenu
+        nodeId={NODE}
+        nodeName="Writer"
+        state="COMPLETED"
+        nodeRunId={NODE_RUN}
+        runGoing
+        {...callbacks()}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Run actions for Writer' }));
+    const start = await screen.findByRole('menuitem', { name: 'Start from this node' });
+    expect(start).toHaveAttribute('data-disabled');
+    expect(start).toHaveAttribute('title', 'A run is going — stop it first');
+    // the node's own actions are not a new run
+    expect(screen.getByRole('menuitem', { name: 'Re-run this node' })).not.toHaveAttribute(
+      'data-disabled',
+    );
+  });
+
+  describe('D388 a node run cut off before it finished can be retried too', () => {
+    const restarted = (code: string) => ({
+      kind: 'workflow' as const,
+      code,
+      message: 'The engine restarted under this step.',
+      retryable: false,
+    });
+    const retryItems = async (props: {
+      state: 'STOPPED' | 'BLOCKED';
+      error?: ReturnType<typeof restarted>;
+    }) => {
+      const user = userEvent.setup();
+      render(
+        <NodeRunMenu
+          nodeId={NODE}
+          nodeName="Writer"
+          nodeRunId={NODE_RUN}
+          {...props}
+          {...callbacks()}
+        />,
+      );
+      await user.click(screen.getByRole('button', { name: 'Run actions for Writer' }));
+      return [
+        await screen.findByRole('menuitem', { name: 'Retry' }),
+        screen.getByRole('menuitem', { name: 'Retry with downstream' }),
+      ];
+    };
+
+    it('offers Retry for a STOPPED node run', async () => {
+      for (const item of await retryItems({ state: 'STOPPED' })) {
+        expect(item).not.toHaveAttribute('data-disabled');
+      }
+    });
+
+    it.each(['engine_restarted', 'approval_lost'])(
+      'offers Retry for a node run left BLOCKED %s',
+      async (code) => {
+        for (const item of await retryItems({ state: 'BLOCKED', error: restarted(code) })) {
+          expect(item).not.toHaveAttribute('data-disabled');
+        }
+      },
+    );
+
+    it('not for one BLOCKED because its upstream failed — it never started', async () => {
+      for (const item of await retryItems({ state: 'BLOCKED' })) {
+        expect(item).toHaveAttribute('data-disabled');
+      }
+    });
+  });
 });
 
 describe('D328 theme pills: every control is a labelled pill', () => {
@@ -197,11 +269,11 @@ describe('D328 theme pills: every control is a labelled pill', () => {
       expect(button).toHaveTextContent(name);
       expect(button).toHaveClass('rounded-full', 'h-[30px]');
     }
-    expect(screen.getByRole('button', { name: 'Stop' })).toHaveClass('text-[#c94c27]');
+    expect(screen.getByRole('button', { name: 'Stop' })).toHaveClass('text-danger');
     rerender(
       <RunControls runId={RUN} status="PAUSED" allowedActions={['resume']} onAction={vi.fn()} />,
     );
-    expect(screen.getByRole('button', { name: 'Stop' })).not.toHaveClass('text-[#c94c27]');
+    expect(screen.getByRole('button', { name: 'Stop' })).not.toHaveClass('text-danger');
   });
 
   it('shows no halt note when showHalt is false', () => {

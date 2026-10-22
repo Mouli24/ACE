@@ -23,14 +23,11 @@ import { validateNumber, type NumberRange } from './validation';
  * (debounced), on blur, and when the modal closes; selects and checkboxes save at once.
  */
 
-/** The theme's field label: JetBrains Mono 9.5px, 0.1em, muted, 500, uppercase. */
-export const FIELD_LABEL = FIELD_LABEL_CLASS;
-
 /** The theme's help line under a field: 11px / 1.45, muted. */
 export const HELP_CLASS = 'text-[11px] leading-[1.45] text-[var(--muted)] [text-wrap:pretty]';
 
 /** The same line when it reports a problem: the theme's destructive ink. */
-export const ERROR_CLASS = 'text-[11px] leading-[1.45] text-[#c94c27] [text-wrap:pretty]';
+export const ERROR_CLASS = 'text-[11px] leading-[1.45] text-danger [text-wrap:pretty]';
 
 /** The theme's paired-fields grid: as many 220px-or-wider columns as fit, gap 20px 16px. */
 export const FIELD_GRID_CLASS =

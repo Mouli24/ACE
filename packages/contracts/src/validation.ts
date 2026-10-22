@@ -166,6 +166,23 @@ export const RUN_ORDER_VALIDATION_ISSUE_CODES = [
   'order_edge_unknown_node',
 ] as const;
 
+/**
+ * The codes agentic nodes Phase 2 adds: `model_cannot_use_tools` — a node with workspace access on
+ * a model that cannot call tools; `project_folder_missing` — a node with workspace access in a
+ * workflow with no project folder.
+ */
+export const AGENTIC_VALIDATION_ISSUE_CODES = [
+  'model_cannot_use_tools',
+  'project_folder_missing',
+] as const;
+
+/**
+ * [audit E-4, P-3] A **warning** pre-flight raises when a run has a cost cap and a node's model has
+ * no price and its provider does not report what a call cost (D263): the cap cannot count that
+ * node's spend (D359 records it as unknown, never as $0), so the run may go past it.
+ */
+export const COST_VALIDATION_ISSUE_CODES = ['unpriced_model_under_cap'] as const;
+
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
   ...ROUND_2_VALIDATION_ISSUE_CODES,
@@ -174,6 +191,8 @@ export const VALIDATION_ISSUE_CODES = [
   ...ROUND_5_VALIDATION_ISSUE_CODES,
   ...PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
   ...RUN_ORDER_VALIDATION_ISSUE_CODES,
+  ...AGENTIC_VALIDATION_ISSUE_CODES,
+  ...COST_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;

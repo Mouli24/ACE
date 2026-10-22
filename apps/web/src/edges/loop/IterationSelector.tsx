@@ -89,7 +89,7 @@ export function IterationSelector({
                 data-testid={`iteration-option-${run.iteration}${run.attempt > 1 ? `-attempt-${run.attempt}` : ''}`}
                 onClick={() => onSelect(run.id)}
                 className={cn(
-                  'flex w-full cursor-pointer flex-col gap-[3px] rounded-[10px] bg-[var(--surface)] px-3 py-[9px] text-left text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+                  'flex w-full cursor-pointer flex-col gap-[3px] rounded-[10px] bg-[var(--surface)] px-3 py-[9px] text-left text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]',
                   selected
                     ? 'border-[1.5px] border-[#ef6b3f]'
                     : 'border border-[var(--line)] hover:bg-[var(--hover)]',

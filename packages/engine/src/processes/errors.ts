@@ -65,6 +65,16 @@ export const engineStopping = (): HttpError =>
  * PG-5.3 (D361): an agent's command is shown in Forge read-only — it reads no input from the
  * terminal and is not stopped there. Stopping its run stops it (D349).
  */
+/** Task 14: Stop on a foreground agent command; only its run can end it. */
+export const agentCommandStopRun = (processId: string): HttpError =>
+  new HttpError(
+    'invalid_config',
+    'validation_failed',
+    'Stop the run to stop this command.',
+    { processId },
+    false,
+  );
+
 export const agentCommandReadOnly = (processId: string): HttpError =>
   new HttpError(
     'invalid_config',

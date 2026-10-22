@@ -46,6 +46,20 @@ export interface CatalogEntry extends ModelInfo {
   source: ModelSource;
 }
 
+/** Why a manifest model the provider's own listing left out cannot be chosen [audit P-5]. */
+export const NOT_OFFERED_REASON = 'Not offered to this key: the provider did not list it.';
+
+/** A dated snapshot (`claude-sonnet-4-5-20250929`, `gpt-5-2025-08-07`) offers the model it dates. */
+const SNAPSHOT_SUFFIX = /^-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
+
+function offered(listed: ReadonlySet<string>, modelId: string): boolean {
+  if (listed.has(modelId)) return true;
+  for (const id of listed) {
+    if (id.startsWith(modelId) && SNAPSHOT_SUFFIX.test(id.slice(modelId.length))) return true;
+  }
+  return false;
+}
+
 /**
  * Merge what a provider listed with what the manifest knows (FR-MOD-001, FR-MOD-002).
  *
@@ -53,6 +67,10 @@ export interface CatalogEntry extends ModelInfo {
  * exists today — and the manifest fills in everything a listing does not carry: data types,
  * context window and price. A manifest model nobody listed is still offered, marked `manifest`,
  * because a provider without a listing endpoint would otherwise have an empty catalog.
+ *
+ * A listing that did arrive is the provider's word on what this key may use [audit P-5]: a manifest
+ * model it names neither as itself nor as a dated snapshot stays in the catalogue, unavailable,
+ * with {@link NOT_OFFERED_REASON}.
  */
 export function mergeCatalog(
   discovered: readonly ModelInfo[],
@@ -75,15 +93,25 @@ export function mergeCatalog(
             displayName: model.displayName,
             // PG-1.4: the size is the machine's word, never the manifest's.
             ...(model.sizeBytes === undefined ? {} : { sizeBytes: model.sizeBytes }),
+            // [audit P-6] So is whether a node can use it (an embedder the manifest prices).
+            ...(model.available === undefined ? {} : { available: model.available }),
+            ...(model.unavailableReason === undefined
+              ? {}
+              : { unavailableReason: model.unavailableReason }),
             source: 'discovered',
           },
     );
   }
 
+  const listed = new Set(discovered.map((model) => model.modelId));
   for (const model of manifest) {
     if (seen.has(model.modelId)) continue;
     seen.add(model.modelId);
-    merged.push({ ...model, source: 'manifest' });
+    merged.push(
+      listed.size === 0 || offered(listed, model.modelId)
+        ? { ...model, source: 'manifest' }
+        : { ...model, source: 'manifest', available: false, unavailableReason: NOT_OFFERED_REASON },
+    );
   }
 
   return merged;

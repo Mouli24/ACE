@@ -106,7 +106,7 @@ describe('D328 quick open in the theme', () => {
     await screen.findByTestId('forge');
     await user.keyboard('{Control>}p{/Control}');
     const input = await screen.findByRole('combobox', { name: 'Go to file' });
-    expect(input).toHaveClass('h-[38px]', 'rounded-[9px]', 'focus:border-[#ef6b3f]');
+    expect(input).toHaveClass('h-[38px]', 'rounded-[9px]', 'focus:border-[var(--focus)]');
     expect(screen.getByRole('dialog')).toHaveClass('rounded-[18px]', 'top-[12%]');
     await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
     const [first, second] = screen.getAllByRole('option');

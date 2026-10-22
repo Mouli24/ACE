@@ -19,6 +19,7 @@ import {
 
 import { DOC_H, DOC_W, anchorOfPort, cardSize, type Point } from '../nodes/anchors';
 import type { EdgeEnd, EdgeTypeOption } from './edge-edit';
+import { useEdgeFlow, type EdgeFlow } from './edge-flow';
 import type { PortConnectState } from './interactions/ports';
 import { GHOST_EDGE_CLASS } from './run-snapshot';
 import type { AceAnyFlowEdge } from './to-flow';
@@ -38,12 +39,35 @@ export interface EdgeStrokeProps {
   selected: boolean;
   /** PG-4.4: an edge the live run still walks but the graph lost — drawn faint. */
   ghost?: boolean;
+  /** D390: what the run on show did with this data edge; `none` (the default) is the theme's look. */
+  flow?: EdgeFlow;
+  /** D390: the flow said in words, as the edge's `<title>`. */
+  title?: string | undefined;
 }
+
+/**
+ * D390: how each flow state draws the line. `none` and `flowing` are the theme's own flowing dashes
+ * (D332); `delivered` is solid; `waiting` is dim and still, in the muted ink; `cut` is still, in the
+ * failed status red (a theme token, light and dark). Only the flowing two animate — `.ace-edge-flow`
+ * moves the dashes whenever it is on, so the still states leave it off.
+ */
+const FLOW_LOOK: Record<
+  EdgeFlow,
+  { stroke: string; dashed: boolean; animated: boolean; glow: boolean; opacity?: number }
+> = {
+  none: { stroke: '#ef6b3f', dashed: true, animated: true, glow: true },
+  flowing: { stroke: '#ef6b3f', dashed: true, animated: true, glow: true },
+  delivered: { stroke: '#ef6b3f', dashed: false, animated: false, glow: true },
+  waiting: { stroke: 'var(--muted)', dashed: true, animated: false, glow: false, opacity: 0.55 },
+  cut: { stroke: 'var(--color-status-FAILED)', dashed: true, animated: false, glow: true },
+};
 
 /**
  * One edge as the theme draws it (D332): a 6px glow at `--edgeGlow` (0.3 when the edge is
  * selected), the 1.6px dashed line flowing along it, a filled dot where it leaves and a ringed dot
- * where it arrives.
+ * where it arrives. D390: a data edge of a run on show is drawn by its `flow` instead — solid once
+ * delivered, dim while waiting, red where it was cut off — and says so in `data-flow` and its
+ * title. A selected edge keeps its glow whatever the flow, so a picked edge stays unmistakable.
  */
 export const EdgeStroke = memo(function EdgeStroke({
   id,
@@ -54,43 +78,84 @@ export const EdgeStroke = memo(function EdgeStroke({
   y2,
   selected,
   ghost = false,
+  flow = 'none',
+  title,
 }: EdgeStrokeProps) {
+  const look = FLOW_LOOK[flow];
   return (
     <g
       data-testid={`edge-line-${id}`}
       data-selected={selected ? 'true' : 'false'}
       data-ghost={ghost ? 'true' : undefined}
+      data-flow={flow}
       opacity={ghost ? 0.35 : undefined}
     >
+      {title !== undefined && <title>{title}</title>}
       <path
         d={d}
         style={{
           fill: 'none',
-          stroke: '#ef6b3f',
+          stroke: look.stroke,
           // selected: a wider, stronger glow and a heavier line, so a picked edge is unmistakable
           strokeWidth: selected ? 10 : 6,
-          opacity: selected ? 0.4 : 'var(--edgeGlow)',
+          opacity: selected ? 0.4 : look.glow ? 'var(--edgeGlow)' : 0,
         }}
       />
       <path
         d={d}
-        className="ace-edge-flow"
+        className={look.animated ? 'ace-edge-flow' : undefined}
         style={{
           fill: 'none',
-          stroke: '#ef6b3f',
+          stroke: look.stroke,
           strokeWidth: selected ? 2.4 : 1.6,
-          strokeDasharray: '5 5',
+          ...(look.dashed ? { strokeDasharray: '5 5' } : {}),
+          ...(look.opacity === undefined ? {} : { opacity: look.opacity }),
         }}
       />
-      <circle cx={x1} cy={y1} r={3} style={{ fill: '#ef6b3f' }} />
+      <circle cx={x1} cy={y1} r={3} style={{ fill: look.stroke, opacity: look.opacity }} />
       <circle
         cx={x2}
         cy={y2}
         r={3.5}
-        style={{ fill: 'var(--canvas)', stroke: '#ef6b3f', strokeWidth: 1.6 }}
+        style={{
+          fill: 'var(--canvas)',
+          stroke: look.stroke,
+          strokeWidth: 1.6,
+          opacity: look.opacity,
+        }}
       />
     </g>
   );
+});
+
+/**
+ * D390: a data edge's stroke, reading its own flow from the run overlay. Its props are primitives
+ * and its store subscription is this edge's alone, so a frame re-renders only the edges whose
+ * source state or delivery it changed — not all 400 (NFR-PERF-04, TC-NFR-001).
+ */
+const RunEdgeStroke = memo(function RunEdgeStroke({
+  workflowId,
+  sourceNodeId,
+  targetNodeId,
+  sourceName,
+  targetName,
+  ...stroke
+}: Omit<EdgeStrokeProps, 'flow' | 'title'> & {
+  workflowId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  sourceName: string;
+  targetName: string;
+}) {
+  const { flow, title } = useEdgeFlow(
+    workflowId,
+    stroke.id,
+    sourceNodeId,
+    targetNodeId,
+    sourceName,
+    targetName,
+  );
+  return <EdgeStroke {...stroke} flow={flow} title={title} />;
 });
 
 const CHIP =
@@ -157,7 +222,7 @@ export interface EdgeReconnectDrag {
 }
 
 const CHIP_BUTTON =
-  'nopan nodrag flex cursor-pointer items-center gap-[3px] whitespace-nowrap rounded-[5px] border bg-[var(--chip)] py-[3px] pl-[8px] pr-[5px] text-[9.5px] font-medium text-[var(--muted)] outline-none hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:border-[#ef6b3f] focus-visible:ring-2 focus-visible:ring-[rgba(239,107,63,0.35)]';
+  'nopan nodrag flex cursor-pointer items-center gap-[3px] whitespace-nowrap rounded-[5px] border bg-[var(--chip)] py-[3px] pl-[8px] pr-[5px] text-[9.5px] font-medium text-[var(--muted)] outline-none hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:border-[var(--focus)] focus-visible:ring-2 focus-visible:ring-[rgba(239,107,63,0.35)]';
 
 /** The type dropdown's rows: every data type, the current one checked, the impossible ones greyed with why. */
 function EdgeTypeItems({ edgeId, edit }: { edgeId: string; edit: EdgeEditApi }) {
@@ -294,7 +359,7 @@ export const EdgeTypeChip = memo(function EdgeTypeChip({
           data-testid={`edge-remove-${id}`}
           aria-label="Remove connection"
           title="Remove connection"
-          className="nopan nodrag flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--chip)] text-[var(--muted)] outline-none hover:border-[#c94c27] hover:text-[#c94c27] focus-visible:border-[#c94c27] focus-visible:text-[#c94c27]"
+          className="nopan nodrag flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--chip)] text-[var(--muted)] outline-none hover:border-[#c94c27] hover:text-danger focus-visible:border-[#c94c27] focus-visible:text-danger"
           onClick={() => edit.remove(id)}
         >
           <Icons.X aria-hidden size={11} />
@@ -490,7 +555,8 @@ function PortDots({
  * dropdown and its ✕, and a hovered or selected data edge shows a grab handle on each end
  * (FR-CON-001/004/006); loop edges keep their own chip and menu (FR-CON-007). The anchors are the
  * ports' theme anchors on the nodes' live positions from React Flow's store, so an edge follows a
- * node while it is dragged.
+ * node while it is dragged. D390: while a run of the nodes' workflow is on show, each data edge is
+ * drawn by its flow state (`edge-flow.ts`), each subscribing to the overlay on its own.
  */
 export const EdgeLayer = memo(function EdgeLayer({
   nodes,
@@ -518,12 +584,22 @@ export const EdgeLayer = memo(function EdgeLayer({
       const target = byId.get(edge.target);
       const a: Point | undefined = source && anchorOfPort(source, edge.sourceHandle ?? '');
       const b: Point | undefined = target && anchorOfPort(target, edge.targetHandle ?? '');
-      return a && b ? [{ edge, a, b, label: labelOf(edge) }] : [];
+      // D390: a data edge reads its flow from the run of its workflow; a loop edge keeps its look.
+      const label = labelOf(edge);
+      const run =
+        source !== undefined && label.kind === 'data'
+          ? {
+              workflowId: source.workflowId,
+              sourceName: source.name || 'Untitled',
+              targetName: target?.name || 'the next node',
+            }
+          : undefined;
+      return a && b ? [{ edge, a, b, label, run }] : [];
     });
   }, [nodes, edges]);
 
   const positions = new Map(live.map((node) => [node.id, node.position]));
-  const drawn = ends.flatMap(({ edge, a, b, label }) => {
+  const drawn = ends.flatMap(({ edge, a, b, label, run }) => {
     const from = positions.get(edge.source);
     const to = positions.get(edge.target);
     if (!from || !to) return [];
@@ -545,6 +621,9 @@ export const EdgeLayer = memo(function EdgeLayer({
         editable: edit !== undefined && !ghost && label.kind === 'data',
         moving,
         label,
+        run,
+        source: edge.source,
+        target: edge.target,
         ...edgePath(x1, y1, x2, y2),
       },
     ];
@@ -560,19 +639,38 @@ export const EdgeLayer = memo(function EdgeLayer({
           className="pointer-events-none absolute left-0 top-0 h-px w-px overflow-visible"
           aria-hidden
         >
-          {drawn.map(({ id, d, x1, y1, x2, y2, selected, ghost }) => (
-            <EdgeStroke
-              key={id}
-              id={id}
-              d={d}
-              x1={x1}
-              y1={y1}
-              x2={x2}
-              y2={y2}
-              selected={selected}
-              ghost={ghost}
-            />
-          ))}
+          {drawn.map(({ id, d, x1, y1, x2, y2, selected, ghost, run, source, target }) =>
+            run === undefined ? (
+              <EdgeStroke
+                key={id}
+                id={id}
+                d={d}
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                selected={selected}
+                ghost={ghost}
+              />
+            ) : (
+              <RunEdgeStroke
+                key={id}
+                id={id}
+                d={d}
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                selected={selected}
+                ghost={ghost}
+                workflowId={run.workflowId}
+                sourceNodeId={source}
+                targetNodeId={target}
+                sourceName={run.sourceName}
+                targetName={run.targetName}
+              />
+            ),
+          )}
         </svg>
         {drawn.map(({ id, mx, my, label, editable, selected }) =>
           editable && edit !== undefined && label.kind === 'data' ? (
@@ -824,7 +922,7 @@ export const OrderEdgeLayer = memo(function OrderEdgeLayer({
                   data-testid={`order-edge-remove-${link.id}`}
                   aria-label={`Remove: ${label}`}
                   title="Remove this run-after link"
-                  className="flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--chip)] text-[var(--muted)] outline-none hover:border-[#c94c27] hover:text-[#c94c27] focus-visible:border-[#c94c27] focus-visible:text-[#c94c27]"
+                  className="flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--chip)] text-[var(--muted)] outline-none hover:border-[#c94c27] hover:text-danger focus-visible:border-[#c94c27] focus-visible:text-danger"
                   onClick={() => {
                     setHovered(undefined);
                     edit.remove(link.id);

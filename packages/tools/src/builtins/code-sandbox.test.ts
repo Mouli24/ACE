@@ -97,6 +97,44 @@ describe("TC-TOOL-004/005 code_sandbox execution", () => {
     expect(result.stderr).toContain("network access is denied");
   });
 
+  it("denies DNS and UDP too, through every entry point [audit S-3]", async () => {
+    // Each probe prints the denial it got, or `REACHED` when the call went out.
+    const code = `
+      const dns = require('node:dns');
+      const dgram = require('node:dgram');
+      const out = [];
+      const probe = (name, fn) => {
+        try { fn(); out.push(name + ':REACHED'); } catch (e) { out.push(name + ':' + e.message); }
+      };
+      probe('lookup', () => dns.lookup('localhost', () => {}));
+      probe('resolve4', () => dns.resolve4('localhost', () => {}));
+      probe('resolver', () => new dns.Resolver().resolve4('localhost', () => {}));
+      probe('lookupService', () => dns.lookupService('127.0.0.1', 22, () => {}));
+      probe('createSocket', () => dgram.createSocket('udp4'));
+      probe('udpSend', () => new dgram.Socket('udp4').send(Buffer.from('x'), 53, '127.0.0.1'));
+      // setServers re-binds the module's resolve* from the Resolver prototype: still denied.
+      dns.setServers(['127.0.0.1']);
+      probe('rebound', () => dns.resolve4('localhost', () => {}));
+      Promise.allSettled([
+        dns.promises.lookup('localhost'),
+        require('node:dns/promises').resolve4('localhost'),
+        new dns.promises.Resolver().resolveTxt('localhost'),
+      ]).then((settled) => {
+        settled.forEach((s, i) => out.push('promise' + i + ':' + (s.status === 'rejected' ? s.reason.message : 'REACHED')));
+        process.stdout.write(out.join('\\n'));
+      });
+    `;
+    const result = (await tool.implementation(
+      { language: "javascript", code },
+      ctx(),
+    )) as { stdout: string; exitCode: number };
+
+    const lines = result.stdout.split("\n");
+    expect(lines).toHaveLength(10);
+    for (const line of lines) expect(line).toMatch(/:ACE sandbox: network access is denied$/);
+    expect(result.exitCode).toBe(0);
+  });
+
   it("refuses a bad args shape", async () => {
     await expect(
       tool.implementation({ language: "ruby", code: "x" }, ctx()),

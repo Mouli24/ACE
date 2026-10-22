@@ -243,11 +243,19 @@ export type LoopIterationPayload = z.infer<typeof LoopIterationPayloadSchema>;
 
 /* Round 4 §2.5 — four persisted, one transient. */
 
+/** The longest model call id a frame carries; providers' own ids are far shorter. */
+export const TOOL_CALL_ID_MAX = 200;
+
 /** One logged tool call, as it happened (FR-TOOL-009, TC-TOOL-010). */
 export const ToolCallPayloadSchema = z.strictObject({
   runId: IdSchema,
   nodeRunId: IdSchema,
   toolCall: ToolCallSchema,
+  /**
+   * D381: the model's id for the call, on an agentic node's calls — the `callId` of the
+   * `tool.started` frame this call ends. Absent on every other call.
+   */
+  callId: z.string().min(1).max(TOOL_CALL_ID_MAX).optional(),
 });
 export type ToolCallPayload = z.infer<typeof ToolCallPayloadSchema>;
 
@@ -340,6 +348,42 @@ export const MemoryUpdatedPayloadSchema = z.strictObject({
 });
 export type MemoryUpdatedPayload = z.infer<typeof MemoryUpdatedPayloadSchema>;
 
+/* Agentic nodes — `node.turn` persisted (D375), `tool.started` transient (D381). */
+
+/** The most of a path or a command `tool.started` names. */
+export const TOOL_TARGET_MAX = 200;
+
+/**
+ * One finished model turn of an agentic node's tool loop (D375, FR-TOOL-003): which turn it was,
+ * what that one call used, and how many tools it asked for. Append-only, like every run event; the
+ * turn history itself never leaves the node (BR-02).
+ */
+export const NodeTurnPayloadSchema = z.strictObject({
+  runId: IdSchema,
+  nodeRunId: IdSchema,
+  nodeId: IdSchema,
+  turn: z.number().int().min(1),
+  tokensIn: z.number().int().min(0),
+  tokensOut: z.number().int().min(0),
+  toolCalls: z.number().int().min(0),
+});
+export type NodeTurnPayload = z.infer<typeof NodeTurnPayloadSchema>;
+
+/**
+ * D381: an agentic node is about to run a tool — what it is doing right now, for the Canvas card.
+ * Transient: the `tool.call` with the same `callId` is the record. `target` is the path or the
+ * command, secret-masked and cut to {@link TOOL_TARGET_MAX}.
+ */
+export const ToolStartedPayloadSchema = z.strictObject({
+  runId: IdSchema,
+  nodeRunId: IdSchema,
+  nodeId: IdSchema,
+  callId: z.string().min(1).max(TOOL_CALL_ID_MAX),
+  name: z.string().min(1),
+  target: z.string().min(1).max(TOOL_TARGET_MAX).optional(),
+});
+export type ToolStartedPayload = z.infer<typeof ToolStartedPayloadSchema>;
+
 /* -------------------------------------------------------------------------- */
 /* Frames                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -381,6 +425,9 @@ export const RUN_EVENT_FRAME_SCHEMAS = [
   persistedFrame('run.config', RunConfigPayloadSchema),
   persistedFrame('run.blocked', RunBlockedPayloadSchema),
   persistedFrame('run.parked', RunParkedPayloadSchema),
+  /* Agentic nodes (D375, D381). */
+  persistedFrame('node.turn', NodeTurnPayloadSchema),
+  transientFrame('tool.started', ToolStartedPayloadSchema),
 ] as const;
 
 /**
@@ -463,6 +510,8 @@ export const RUN_EVENT_TYPES = [
   'run.config',
   'run.blocked',
   'run.parked',
+  'node.turn',
+  'tool.started',
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
@@ -492,9 +541,10 @@ export const PROJECT_EVENT_TYPES = [
 ] as const;
 export type ProjectEventType = (typeof PROJECT_EVENT_TYPES)[number];
 
-/** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5, D299, D301). */
+/** Not persisted, no `seq`, never replayed by `resume` (§2.4, round 4 §2.5, D299, D301, D381). */
 export const TRANSIENT_EVENT_TYPES = [
   'node.token',
+  'tool.started',
   'chat.token',
   'files.changed',
   'process.output',

@@ -114,6 +114,8 @@ interface Harness {
 
 let harness: Harness;
 let adapterStatus: ProviderState;
+/** What the stub's check says beside its status; undefined unless a test sets it. */
+let adapterMessage: string | undefined;
 let adapterCalls: { check: number; listModels: number };
 
 async function build(): Promise<Harness> {
@@ -124,7 +126,7 @@ async function build(): Promise<Harness> {
   const events: EngineEvent[] = [];
   await bus.subscribe((event) => events.push(event));
 
-  const stub = stubAdapter(adapterStatus);
+  const stub = stubAdapter(adapterStatus, adapterMessage);
   adapterCalls = stub.calls;
 
   const service = createProviderService({
@@ -157,6 +159,7 @@ async function build(): Promise<Harness> {
 
 beforeEach(async () => {
   adapterStatus = 'CONNECTED';
+  adapterMessage = undefined;
   harness = await build();
 });
 
@@ -247,6 +250,57 @@ describe('FR-PRV-005 editing and rotating', () => {
 
   it('returns null for a provider that is not there', async () => {
     expect(await harness.service.update('01JBXQ8Z9KQ4R7N2VWXYZ0PRVD', { name: 'x' })).toBeNull();
+  });
+});
+
+describe('audit P-10 an HTTP provider is checked when it is saved', () => {
+  it('checks it as it is added, and lists its models when it answers', async () => {
+    const provider = await harness.created({ type: 'openai', name: 'OpenAI', apiKey: 'k' });
+
+    expect(provider).toMatchObject({ status: 'CONNECTED', lastCheckedAt: NOW });
+    expect(await harness.service.get(provider.id)).toEqual(provider);
+    expect(adapterCalls.check).toBe(1);
+    const models = await harness.service.listModels({ providerId: provider.id });
+    expect(models.map((m) => m.modelId)).toEqual(['mock-text']);
+  });
+
+  it('adds it at whatever state the check found, without listing an unreachable one', async () => {
+    adapterStatus = 'UNREACHABLE';
+    harness = await build();
+
+    const provider = await harness.created({ type: 'openai_compatible', baseUrl: 'http://x.local' });
+
+    expect(provider.status).toBe('UNREACHABLE');
+    expect(adapterCalls.listModels).toBe(0);
+  });
+
+  it('still adds it when the check itself throws', async () => {
+    vi.spyOn(harness.service, 'check').mockRejectedValueOnce(new Error('adapter blew up'));
+
+    const provider = await harness.created({ type: 'anthropic', apiKey: 'k' });
+
+    expect(provider.status).toBe('UNKNOWN');
+    expect(await harness.service.get(provider.id)).not.toBeNull();
+  });
+
+  it('re-checks and re-lists after a new key or address, but not after a rename', async () => {
+    const provider = await harness.created({ type: 'openai_compatible', baseUrl: 'http://a.local' });
+    expect(adapterCalls).toEqual({ check: 1, listModels: 1 });
+
+    await harness.service.update(provider.id, { name: 'Renamed', baseUrl: 'http://a.local' });
+    expect(adapterCalls).toEqual({ check: 1, listModels: 1 });
+
+    await harness.service.update(provider.id, { apiKey: 'rotated' });
+    expect(adapterCalls).toEqual({ check: 2, listModels: 2 });
+
+    const moved = await harness.service.update(provider.id, { baseUrl: 'http://b.local' });
+    expect(adapterCalls).toEqual({ check: 3, listModels: 3 });
+    expect(moved).toMatchObject({ baseUrl: 'http://b.local', status: 'CONNECTED' });
+  });
+
+  it('leaves the mock provider to be checked when asked', async () => {
+    expect((await harness.created()).status).toBe('UNKNOWN');
+    expect(adapterCalls.check).toBe(0);
   });
 });
 
@@ -344,6 +398,24 @@ describe('TC-PRV-003 / TC-PRV-004 checking a provider', () => {
     expect(harness.events.filter((e) => e.type === 'provider.status')).toHaveLength(2);
   });
 
+  it('audit P-18 masks a key the provider echoed before storing, announcing or returning it', async () => {
+    // Assembled at runtime: a key-shaped literal in the repo is itself banned (CLAUDE.md §2).
+    const key = ['sk', 'ant', 'e'.repeat(32)].join('-');
+    adapterStatus = 'AUTH_FAILED';
+    adapterMessage = `Provider responded 401: invalid key ${key}`;
+    harness = await build();
+    const provider = await harness.created();
+
+    const result = await harness.service.check(provider.id);
+
+    const stored = await harness.service.get(provider.id);
+    const [event] = harness.events.filter((e) => e.type === 'provider.status');
+    for (const said of [result.message, stored?.statusMessage, JSON.stringify(event?.payload)]) {
+      expect(said).toContain('invalid key');
+      expect(said).not.toContain(key);
+    }
+  });
+
   it('reports a provider that is gone rather than throwing', async () => {
     await expect(harness.service.check('01JBXQ8Z9KQ4R7N2VWXYZ0PRVD')).rejects.toThrow(/not found/i);
   });
@@ -399,6 +471,64 @@ describe('FR-PRV-007 local runtime detection', () => {
     expect(await harness.service.detect()).toEqual({
       ollama: { baseUrl: 'http://127.0.0.1:11434', detected: false },
     });
+  });
+});
+
+describe('audit P-13 a removed Ollama is not added back by detection', () => {
+  it('stops auto-adding once the person removes it, until the runtime is asked for', async () => {
+    const repository = new FakeRepository();
+    const bus = createEventBus({
+      repository,
+      scope,
+      pubsub: new InProcessPubSubStub<EngineEvent>(),
+      now: () => NOW,
+    });
+    const probe = {
+      installed: true,
+      running: true,
+      startedByAce: false,
+      baseUrl: 'http://127.0.0.1:11434',
+    };
+    const ensureRunning = vi.fn(async () => probe);
+    const service = createProviderService({
+      repository,
+      scope,
+      secrets: fakeSecrets(),
+      bus,
+      logger: createLogger({ level: 'silent', destination: { write: () => undefined } }),
+      now: () => NOW,
+      autoLocalRuntime: true,
+      factory: {
+        create: () => stubAdapter('CONNECTED').adapter,
+        manifestFor: () => [],
+        mergeCatalog: (discovered) =>
+          discovered.map((m) => ({ ...m, source: 'discovered' as const })),
+        detect: async () => ({ ollama: { baseUrl: probe.baseUrl, detected: true } }),
+        local: {
+          status: async () => probe,
+          ensureRunning,
+          stopOwned: async () => undefined,
+          running: async () => [],
+          load: async () => undefined,
+          unload: async () => undefined,
+          pull: async () => undefined,
+        },
+      },
+    });
+    const ollamas = async () => (await service.list()).filter((p) => p.type === 'ollama');
+
+    await service.detect();
+    const [added] = await ollamas();
+    expect(added).toBeDefined();
+
+    await service.remove(added!.id, { confirm: true });
+    await service.detect();
+    await service.detect();
+    expect(await ollamas()).toHaveLength(0);
+    expect(ensureRunning).not.toHaveBeenCalled();
+
+    await service.ensureLocalRuntime();
+    expect(await ollamas()).toHaveLength(1);
   });
 });
 

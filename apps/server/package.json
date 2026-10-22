@@ -41,7 +41,7 @@
     "@ace/tools": "workspace:*",
     "@hono/node-server": "^2.1.1",
     "hono": "^4.13.8",
-    "ws": "^8.21.3",
-    "zod": "^4.6.5"
+    "pyright": "1.1.414",
+    "ws": "^8.21.3"
   }
 }

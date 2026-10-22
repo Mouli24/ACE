@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 
+import { JSON_BODY_MAX_BYTES, limitBody } from './body-limit.js';
 import { validationFailed } from './errors.js';
 
 /**
@@ -10,9 +11,12 @@ import { validationFailed } from './errors.js';
  * optional, so a truncated `{"maxCostPerRunUsd": 0.01` read as `{}` would answer 200 and change
  * nothing, and the client would believe the cap was set.
  *
- * One copy, shared by the gateway and the routers it mounts, so they cannot disagree about it.
+ * One copy, shared by the gateway and the routers it mounts, so they cannot disagree about it — and
+ * so the one place a JSON body is read is the place it is capped: over {@link JSON_BODY_MAX_BYTES}
+ * is 413 `upload_too_large`, refused before the text is held [audit S-9].
  */
 export async function readJson(c: Context): Promise<unknown> {
+  await limitBody(() => JSON_BODY_MAX_BYTES)(c, async () => undefined);
   const text = await c.req.text();
   if (text.trim() === '') return {};
 

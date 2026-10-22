@@ -188,6 +188,9 @@ export const models = sqliteTable(
     unavailableReason: text('unavailable_reason'),
     /** D359: size on disk as a local provider reports it; null where it says nothing. */
     sizeBytes: integer('size_bytes'),
+    /** D380: what the person set; NULL means "as the catalogue says". A refresh keeps both. */
+    supportsToolsOverride: integer('supports_tools_override', { mode: 'boolean' }),
+    contextWindowOverride: integer('context_window_override'),
   },
   (table) => [index('models_provider_idx').on(table.workspaceId, table.providerId, table.modelId)],
 );
@@ -294,6 +297,8 @@ export const nodeRuns = sqliteTable(
     droppedSources: text('dropped_sources'),
     /** JSON `MemoryOp[]`: the `__memory` ops this node run applied, in order (§2.2, D230). */
     memoryOps: text('memory_ops'),
+    /** D378: JSON `WorkspaceSummary` — an agentic node step's files and commands. NULL otherwise. */
+    workspace: text('workspace_json'),
     startedAt: text('started_at'),
     endedAt: text('ended_at'),
     durationMs: integer('duration_ms'),
@@ -390,9 +395,14 @@ export const approvals = sqliteTable(
     reason: text('reason').notNull(),
     /** ≤ 500 chars and already redacted: a preview carrying a credential is refused (BR-07). */
     preview: text('preview').notNull(),
+    /** D376: JSON `ApprovalCommand` — an agentic node's `run_command`; NULL on every other request. */
+    command: text('command'),
     requestedAt: text('requested_at').notNull(),
     decision: text('decision'),
     note: text('note'),
+    /** D376: 1 when approved with Always allow, and the prefix the person chose to always allow. */
+    always: integer('always', { mode: 'boolean' }),
+    prefix: text('prefix'),
     decidedAt: text('decided_at'),
   },
   (table) => [
@@ -457,6 +467,8 @@ export const toolCalls = sqliteTable(
     /** JSON `Verdict[]` — the tool-point verdicts this call recorded. */
     verdicts: text('verdicts').notNull(),
     at: text('at').notNull(),
+    /** D378: JSON `string[]` — the project files an agentic node's call changed. NULL otherwise. */
+    changedPaths: text('changed_paths_json'),
   },
   (table) => [
     index('tool_calls_node_run_idx').on(table.workspaceId, table.nodeRunId, table.id),

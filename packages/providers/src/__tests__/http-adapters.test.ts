@@ -2,12 +2,13 @@ import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import type { ProviderAdapter, StreamChunk } from '../adapter.js';
+import type { ModelInfo, ProviderAdapter, StreamChunk } from '../adapter.js';
+import { NOT_A_CHAT_MODEL } from '../adapters/ai-sdk.js';
 import { createAnthropicAdapter } from '../adapters/anthropic.js';
 import { createGoogleAdapter } from '../adapters/google.js';
-import { createOllamaAdapter, detectOllama } from '../adapters/ollama.js';
+import { createOllamaAdapter, detectOllama, ollamaRoot } from '../adapters/ollama.js';
 import { createOpenAiAdapter } from '../adapters/openai.js';
-import { createOpenAiCompatibleAdapter } from '../adapters/openai-compatible.js';
+import { createOpenAiCompatibleAdapter, openAiApiRoot } from '../adapters/openai-compatible.js';
 
 /**
  * Recorded HTTP, never the network (CLAUDE.md §2). Every handler below is a shape one of these
@@ -70,6 +71,29 @@ describe('TC-PRV-003 a wrong key is reported as AUTH_FAILED', () => {
     );
 
     expect((await createGoogleAdapter({ apiKey: 'wrong' }).check()).status).toBe('AUTH_FAILED');
+  });
+
+  it('audit P-7 google, which refuses a bad key with 400 INVALID_ARGUMENT', async () => {
+    server.use(
+      http.get('https://generativelanguage.googleapis.com/v1beta/models', () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: 400,
+              message: 'API key not valid. Please pass a valid API key.',
+              status: 'INVALID_ARGUMENT',
+              details: [{ reason: 'API_KEY_INVALID', domain: 'googleapis.com' }],
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    );
+
+    const status = await createGoogleAdapter({ apiKey: 'wrong' }).check();
+
+    expect(status.status).toBe('AUTH_FAILED');
+    expect(status.message).toContain('API key not valid');
   });
 });
 
@@ -560,5 +584,351 @@ describe('FR-RAG-004 embed() failures are classified like generate()', () => {
     await expect(
       embedOf(createOllamaAdapter())(['a', 'b'], { modelId: 'm' }),
     ).rejects.toMatchObject({ nodeError: { code: 'bad_embedding_response', retryable: false } });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* audit P-4 a base URL that already names its API version                     */
+/* -------------------------------------------------------------------------- */
+
+describe('audit P-4 a base URL that already ends in /v1 is the API root', () => {
+  it.each([
+    ['http://localhost:1234', 'http://localhost:1234/v1'],
+    ['http://localhost:1234/', 'http://localhost:1234/v1'],
+    ['http://localhost:1234/v1', 'http://localhost:1234/v1'],
+    ['http://localhost:1234/v1/', 'http://localhost:1234/v1'],
+    ['https://gateway.local/v2', 'https://gateway.local/v2'],
+    ['https://openrouter.ai/api/v1', 'https://openrouter.ai/api/v1'],
+    ['https://api.groq.com/openai/v1', 'https://api.groq.com/openai/v1'],
+    [
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+    ],
+  ])('reads %s as %s', (pasted, root) => {
+    expect(openAiApiRoot(pasted)).toBe(root);
+  });
+
+  it('lists and chats under a pasted …/v1 without doubling it', async () => {
+    server.use(
+      http.get('http://localhost:1234/v1/models', () =>
+        HttpResponse.json({ data: [{ id: 'local-model' }] }),
+      ),
+      http.post('http://localhost:1234/v1/chat/completions', () => sseStream()),
+    );
+    const adapter = createOpenAiCompatibleAdapter({ baseUrl: 'http://localhost:1234/v1/' });
+
+    expect((await adapter.check()).status).toBe('CONNECTED');
+    expect((await adapter.listModels()).map((m) => m.modelId)).toEqual(['local-model']);
+    const chunks = await collect(
+      adapter.generate(
+        { modelId: 'local-model', prompt: 'hi', outputTypes: ['text'] },
+        new AbortController().signal,
+      ),
+    );
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
+
+  it('embeds under a gateway root such as /api/v1', async () => {
+    server.use(
+      http.post('https://router.local/api/v1/embeddings', () =>
+        HttpResponse.json({ data: [{ index: 0, embedding: [1, 0] }] }),
+      ),
+    );
+    const adapter = createOpenAiCompatibleAdapter({ baseUrl: 'https://router.local/api/v1' });
+
+    expect(await embedOf(adapter)(['a'], { modelId: 'bge' })).toEqual([[1, 0]]);
+  });
+
+  it('ollama: a pasted …/v1 still reaches the native /api routes beside it', async () => {
+    server.use(
+      http.get(`${LOCAL}/v1/models`, () => HttpResponse.json({ data: [{ id: 'llama3.2' }] })),
+      http.get(`${LOCAL}/api/tags`, () =>
+        HttpResponse.json({ models: [{ name: 'llama3.2', size: 2_000_000_000 }] }),
+      ),
+      http.post(`${LOCAL}/api/show`, () =>
+        HttpResponse.json({ capabilities: ['completion', 'tools'] }),
+      ),
+    );
+
+    const [model] = await createOllamaAdapter({ baseUrl: `${LOCAL}/v1` }).listModels();
+
+    expect(ollamaRoot(`${LOCAL}/v1/`)).toBe(LOCAL);
+    expect(model).toMatchObject({
+      modelId: 'llama3.2',
+      sizeBytes: 2_000_000_000,
+      supportsTools: true,
+    });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* audit P-6 a model that does not chat is not offered to a node               */
+/* -------------------------------------------------------------------------- */
+
+describe('audit P-6 non-chat models are listed but unavailable to nodes', () => {
+  const availability = (models: { modelId: string; available?: boolean }[]) =>
+    Object.fromEntries(models.map((m) => [m.modelId, m.available ?? true]));
+
+  it('openai: embedders, speech, transcription, images and moderation by name', async () => {
+    server.use(
+      http.get('https://api.openai.com/v1/models', () =>
+        HttpResponse.json({
+          data: [
+            { id: 'gpt-4o' },
+            { id: 'text-embedding-3-small' },
+            { id: 'whisper-1' },
+            { id: 'tts-1' },
+            { id: 'gpt-4o-transcribe' },
+            { id: 'dall-e-3' },
+            { id: 'gpt-image-1' },
+            { id: 'omni-moderation-latest' },
+          ],
+        }),
+      ),
+    );
+
+    const models = await createOpenAiAdapter({ apiKey: 'k' }).listModels();
+
+    expect(availability(models)).toEqual({
+      'gpt-4o': true,
+      'text-embedding-3-small': false,
+      'whisper-1': false,
+      'tts-1': false,
+      'gpt-4o-transcribe': false,
+      'dall-e-3': false,
+      'gpt-image-1': false,
+      'omni-moderation-latest': false,
+    });
+    expect(models.find((m) => m.modelId === 'whisper-1')?.unavailableReason).toBe(
+      NOT_A_CHAT_MODEL,
+    );
+  });
+
+  it('openai_compatible: a guard or speech model on a gateway', async () => {
+    server.use(
+      http.get('http://localhost:1234/v1/models', () =>
+        HttpResponse.json({
+          data: [{ id: 'llama-3.3-70b' }, { id: 'llama-guard-4-12b' }, { id: 'orpheus-v1' }],
+        }),
+      ),
+    );
+
+    const models = await createOpenAiCompatibleAdapter({
+      baseUrl: 'http://localhost:1234',
+    }).listModels();
+
+    expect(availability(models)).toEqual({
+      'llama-3.3-70b': true,
+      'llama-guard-4-12b': false,
+      'orpheus-v1': false,
+    });
+  });
+
+  it('google: generateContent chats; an embedder is kept unavailable; the rest is left out', async () => {
+    server.use(
+      http.get('https://generativelanguage.googleapis.com/v1beta/models', () =>
+        HttpResponse.json({
+          models: [
+            {
+              name: 'models/gemini-2.5-flash',
+              supportedGenerationMethods: ['generateContent', 'countTokens'],
+            },
+            { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] },
+            { name: 'models/imagen-4.0-generate-001', supportedGenerationMethods: ['predict'] },
+            {
+              name: 'models/gemini-2.5-flash-preview-tts',
+              supportedGenerationMethods: ['generateContent'],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const models = await createGoogleAdapter({ apiKey: 'k' }).listModels();
+
+    expect(availability(models)).toEqual({
+      'gemini-2.5-flash': true,
+      'text-embedding-004': false,
+      'gemini-2.5-flash-preview-tts': false,
+    });
+  });
+
+  it('ollama: no `completion` capability means no chat, whatever the name', async () => {
+    server.use(
+      http.get(`${LOCAL}/v1/models`, () =>
+        HttpResponse.json({
+          data: [{ id: 'nomic-embed-text' }, { id: 'llama-guard3' }, { id: 'qwen3' }],
+        }),
+      ),
+      http.get(`${LOCAL}/api/tags`, () => HttpResponse.json({ models: [] })),
+      http.post(`${LOCAL}/api/show`, async ({ request }) => {
+        const { model } = (await request.json()) as { model: string };
+        return HttpResponse.json({
+          capabilities: model === 'nomic-embed-text' ? ['embedding'] : ['completion'],
+        });
+      }),
+    );
+
+    const models = await createOllamaAdapter().listModels();
+
+    expect(availability(models)).toEqual({
+      'nomic-embed-text': false,
+      'llama-guard3': true,
+      qwen3: true,
+    });
+    expect(models.find((m) => m.modelId === 'llama-guard3')?.unavailableReason).toBeUndefined();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* audit P-2 a discovered model is described by what its listing and family say */
+/* -------------------------------------------------------------------------- */
+
+describe('audit P-2 discovered chat models get their family’s capabilities', () => {
+  const capabilities = (model: ModelInfo | undefined) => ({
+    tools: model?.supportsTools,
+    json: model?.supportsJson,
+    image: model?.inputTypes.includes('image'),
+    context: model?.contextWindow,
+  });
+
+  it('anthropic: a Claude 3+ model takes tools, a schema and images, with a 200k window', async () => {
+    server.use(
+      http.get('https://api.anthropic.com/v1/models', () =>
+        HttpResponse.json({ data: [{ id: 'claude-sonnet-4-5-20250929' }, { id: 'claude-2.1' }] }),
+      ),
+    );
+
+    const [sonnet, legacy] = await createAnthropicAdapter({ apiKey: 'k' }).listModels();
+
+    expect(capabilities(sonnet)).toEqual({ tools: true, json: true, image: true, context: 200_000 });
+    expect(sonnet?.outputTypes).toEqual(['text', 'json', 'code']);
+    expect(sonnet?.pricing).toBeUndefined();
+    expect(capabilities(legacy)).toEqual({ tools: false, json: false, image: false, context: 8192 });
+  });
+
+  it('openai: gpt-4.1, gpt-5 and o-series, but not their realtime or audio variants', async () => {
+    server.use(
+      http.get('https://api.openai.com/v1/models', () =>
+        HttpResponse.json({
+          data: [
+            { id: 'gpt-4.1-mini' },
+            { id: 'gpt-5-nano' },
+            { id: 'o4-mini' },
+            { id: 'gpt-4o-realtime-preview' },
+            { id: 'gpt-3.5-turbo' },
+          ],
+        }),
+      ),
+    );
+
+    const byId = new Map(
+      (await createOpenAiAdapter({ apiKey: 'k' }).listModels()).map((m) => [m.modelId, m]),
+    );
+
+    expect(capabilities(byId.get('gpt-4.1-mini')).context).toBe(1_047_576);
+    expect(capabilities(byId.get('gpt-5-nano'))).toEqual({
+      tools: true,
+      json: true,
+      image: true,
+      context: 400_000,
+    });
+    expect(capabilities(byId.get('o4-mini')).tools).toBe(true);
+    expect(capabilities(byId.get('gpt-4o-realtime-preview')).tools).toBe(false);
+    expect(capabilities(byId.get('gpt-3.5-turbo')).tools).toBe(false);
+  });
+
+  it('openai_compatible: a family behind a gateway’s vendor prefix', async () => {
+    server.use(
+      http.get('http://localhost:1234/v1/models', () =>
+        HttpResponse.json({ data: [{ id: 'anthropic/claude-haiku-4.5' }, { id: 'qwen3-32b' }] }),
+      ),
+    );
+
+    const [claude, qwen] = await createOpenAiCompatibleAdapter({
+      baseUrl: 'http://localhost:1234',
+    }).listModels();
+
+    expect(capabilities(claude).tools).toBe(true);
+    expect(capabilities(qwen)).toEqual({ tools: false, json: false, image: false, context: 8192 });
+  });
+
+  it('google: the listing’s inputTokenLimit is the window, and Gemini 1.5+ chats with tools', async () => {
+    server.use(
+      http.get('https://generativelanguage.googleapis.com/v1beta/models', () =>
+        HttpResponse.json({
+          models: [
+            {
+              name: 'models/gemini-2.5-pro',
+              inputTokenLimit: 1_048_576,
+              outputTokenLimit: 65_536,
+              supportedGenerationMethods: ['generateContent'],
+            },
+            {
+              name: 'models/gemma-3-27b-it',
+              inputTokenLimit: 131_072,
+              supportedGenerationMethods: ['generateContent'],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const [pro, gemma] = await createGoogleAdapter({ apiKey: 'k' }).listModels();
+
+    expect(capabilities(pro)).toEqual({ tools: true, json: true, image: true, context: 1_048_576 });
+    expect(capabilities(gemma)).toEqual({
+      tools: false,
+      json: false,
+      image: false,
+      context: 131_072,
+    });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* audit P-14 a paged model listing is read to its end                          */
+/* -------------------------------------------------------------------------- */
+
+describe('audit P-14 model listings are followed across pages', () => {
+  it('anthropic: asks for 1000 a page and follows has_more from last_id', async () => {
+    const asked: string[] = [];
+    server.use(
+      http.get('https://api.anthropic.com/v1/models', ({ request }) => {
+        const url = new URL(request.url);
+        asked.push(url.search);
+        return url.searchParams.get('after_id') === 'claude-a'
+          ? HttpResponse.json({ data: [{ id: 'claude-b' }], has_more: false, last_id: 'claude-b' })
+          : HttpResponse.json({ data: [{ id: 'claude-a' }], has_more: true, last_id: 'claude-a' });
+      }),
+    );
+
+    const models = await createAnthropicAdapter({ apiKey: 'k' }).listModels();
+
+    expect(models.map((m) => m.modelId)).toEqual(['claude-a', 'claude-b']);
+    expect(asked).toEqual(['?limit=1000', '?limit=1000&after_id=claude-a']);
+  });
+
+  it('google: asks for 1000 a page and follows nextPageToken', async () => {
+    const tokens: (string | null)[] = [];
+    server.use(
+      http.get('https://generativelanguage.googleapis.com/v1beta/models', ({ request }) => {
+        const url = new URL(request.url);
+        expect(url.searchParams.get('pageSize')).toBe('1000');
+        const token = url.searchParams.get('pageToken');
+        tokens.push(token);
+        return token === 'p2'
+          ? HttpResponse.json({ models: [{ name: 'models/gemini-2.5-pro' }] })
+          : HttpResponse.json({
+              models: [{ name: 'models/gemini-2.5-flash' }],
+              nextPageToken: 'p2',
+            });
+      }),
+    );
+
+    const models = await createGoogleAdapter({ apiKey: 'k' }).listModels();
+
+    expect(models.map((m) => m.modelId)).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro']);
+    expect(tokens).toEqual([null, 'p2']);
   });
 });

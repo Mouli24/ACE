@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { QueryError } from '../app/QueryError';
 import { useNodeFocusSync } from '../app/follow-node';
+import { isNotFound } from '../app/query-client';
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useWorkflowSubscription } from '../app/socket';
 import { useLayoutStore } from '../app/stores/layout';
@@ -12,6 +14,7 @@ import { useComposerChips } from '../chat/composer-chips';
 import { useChatSocket } from '../chat/useChat';
 import { isChatNode, useDropStaleChatTarget } from '../chat/workflow-target';
 import { useWorkflowMode, workflowPath } from '../forge/mode';
+import { useForgeProject } from '../forge/project-services';
 import { useIsCompact } from '../responsive/useIsCompact';
 import { useRunEvents } from '../runs/hooks';
 import { useAdoptActiveRun, useFollowStartedRun } from '../runs/selected-run';
@@ -43,6 +46,8 @@ export function WorkflowLayout() {
   // PG-3.4: `?node=` and the selected node are one, in every mode.
   useNodeFocusSync(mode);
   useDropStaleChatTarget(workflowId);
+  // [audit F-6] Forge's project services outlive a mode switch: no re-walk entering Forge.
+  useForgeProject(projectId);
   useEffect(() => {
     useComposerChips.getState().enterProject(projectId);
   }, [projectId]);
@@ -68,8 +73,19 @@ export function WorkflowLayout() {
   ]);
 
   if (graph.isError) {
+    // Audit U-2 (D-009): "not found" is the engine's 404 only; any other failure says what it was.
+    if (!isNotFound(graph.error)) {
+      return (
+        <QueryError
+          what="this workflow"
+          error={graph.error}
+          onRetry={() => void graph.refetch()}
+          className="p-6"
+        />
+      );
+    }
     return (
-      <p role="alert" className="p-6 text-[13px] text-[#c94c27]">
+      <p role="alert" className="p-6 text-[13px] text-danger">
         Workflow not found.{' '}
         <Link to={`/projects/${projectId}`} className="underline">
           Back to the project

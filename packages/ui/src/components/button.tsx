@@ -10,7 +10,7 @@ import { cn } from '../lib/cn.js';
  * toolbar's quiet button, `destructive` the "Remove node" red. Plus Jakarta Sans 600.
  */
 export const buttonVariants = cva(
-  'inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-semibold outline-none transition-colors focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:pointer-events-none disabled:opacity-45',
+  'inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-semibold outline-none transition-colors focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:pointer-events-none disabled:opacity-45',
   {
     variants: {
       variant: {
@@ -19,7 +19,7 @@ export const buttonVariants = cva(
           'border border-[var(--line)] bg-[var(--soft)] text-[var(--ink)] hover:bg-[var(--hover)]',
         ghost: 'border-none bg-transparent text-[var(--ink)] hover:bg-[var(--hover)]',
         destructive:
-          'border border-[var(--line)] bg-transparent text-[#c94c27] hover:bg-[var(--hover)]',
+          'border border-[var(--line)] bg-transparent text-danger hover:bg-[var(--hover)]',
         outline:
           'border border-[var(--ink)] bg-transparent text-[var(--ink)] hover:bg-[var(--hover)]',
       },

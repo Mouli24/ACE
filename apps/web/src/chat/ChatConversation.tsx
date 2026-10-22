@@ -12,7 +12,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { api } from '../app/api';
-import { useRun } from '../runs/hooks';
+import { useCheckpoint } from '../forge/changes/hooks';
+import { stepFilesOf } from '../forge/open-in-forge';
+import { useNodeRunsOnce, useRun } from '../runs/hooks';
 import { useNodeOverlay } from '../runs/run-store';
 import { UNDO_UNAVAILABLE_TITLE, UndoChoiceButtons, undoReasonText } from '../runs/UndoChoice';
 import { formatUsd } from '../usage/format';
@@ -23,6 +25,7 @@ import { clockTime } from '../theme/format';
 import { Avatar } from '../theme/primitives';
 import { ChangesCardSlot } from './ChangesCardSlot';
 import { ChatActivity } from './ChatActivity';
+import { useFollowTail } from './follow-tail';
 import {
   CHAT_NOTE_CLASS,
   CHAT_NOTE_HEAD_CLASS,
@@ -199,17 +202,19 @@ export function chatCostText(usage: Usage): string {
 
 /**
  * The line under an agent turn (FR-CHAT-006, D335): the model that actually answered, its tokens,
- * and whether a run of the node wrote it (D285) — then the theme's "Send to Forge →" chip. Only
+ * and whether a run of the node wrote it (D285) — then "Open in Forge →" when the turn wrote files.
+ * Agents write their work into the project themselves, so there is nothing to send to Forge. Only
  * real values: a turn with none of them has no line.
  */
 function TurnMeta({
   message,
-  onSendToForge,
   onOpenRun,
+  agenticForge,
 }: {
   message: ChatMessage;
-  onSendToForge: (() => void) | undefined;
   onOpenRun: ((runId: string) => void) | undefined;
+  /** D378: opens the files the turn wrote in Forge; drawn only when it wrote some. */
+  agenticForge: AgenticForge | undefined;
 }) {
   const parts: ReactNode[] = [];
   if (message.modelId !== undefined) {
@@ -248,18 +253,43 @@ function TurnMeta({
       <span className="min-w-0 text-[10px] text-[var(--muted)]">
         {parts.flatMap((part, index) => (index === 0 ? [part] : [' · ', part]))}
       </span>
-      {onSendToForge !== undefined && (
-        <button
-          type="button"
-          data-testid="chat-send-to-forge"
-          onClick={onSendToForge}
-          className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
-        >
-          Send to Forge
-          <Icons.ArrowRight aria-hidden size={11} />
-        </button>
-      )}
+      {agenticForge !== undefined &&
+        (message.runId !== undefined || message.checkpointId !== undefined) && (
+          <OpenInForgeChip message={message} forge={agenticForge} />
+        )}
     </div>
+  );
+}
+
+/** What an agentic node's turns need to open their files in Forge (D378). */
+interface AgenticForge {
+  nodeId: string;
+  projectId: string;
+  open: (paths: readonly string[], runId?: string) => void;
+}
+
+/**
+ * D378: "Open in Forge" on an agentic node's turn — the files of that step: a run turn's node
+ * run (workspace summary, else its calls' changed paths), or a chat turn's checkpoint.
+ */
+function OpenInForgeChip({ message, forge }: { message: ChatMessage; forge: AgenticForge }) {
+  const nodeRuns = useNodeRunsOnce(message.runId).data;
+  const checkpoint = useCheckpoint(forge.projectId, message.checkpointId ?? '').data;
+  const nodeRun = nodeRuns?.filter((each) => each.nodeId === forge.nodeId).at(-1);
+  const fromRun = stepFilesOf(nodeRun);
+  const files = fromRun.length > 0 ? fromRun : (checkpoint?.files.map((file) => file.path) ?? []);
+  // A turn that wrote nothing has nothing to open.
+  if (files.length === 0) return null;
+  return (
+    <button
+      type="button"
+      data-testid="chat-open-in-forge"
+      onClick={() => forge.open(files, message.runId)}
+      className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
+    >
+      Open in Forge
+      <Icons.ArrowRight aria-hidden size={11} />
+    </button>
   );
 }
 
@@ -270,7 +300,7 @@ function SeeWholeRun({ runId, onOpenRun }: { runId: string; onOpenRun: (runId: s
       type="button"
       data-testid="chat-see-run"
       onClick={() => onOpenRun(runId)}
-      className="cursor-pointer whitespace-nowrap border-0 bg-transparent p-0 font-semibold text-[#e8623a] hover:text-[#c94c27] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      className="cursor-pointer whitespace-nowrap border-0 bg-transparent p-0 font-semibold text-[#e8623a] hover:text-danger focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
     >
       See the whole run →
     </button>
@@ -313,19 +343,19 @@ export function ChatConversation({
   node,
   convo,
   composer,
-  onSendToForge,
   speakers,
   projectId,
   onOpenRun,
+  openInForge,
 }: {
   node: Node;
   convo: Conversation;
+  /** D378: opens in Forge the files a turn wrote (the column only). */
+  openInForge?: (paths: readonly string[], runId?: string) => void;
   /** A run turn's "See the whole run →": show that run's conversation (the column only). */
   onOpenRun?: (runId: string) => void;
   /** The input box, when it belongs inside the conversation (the phone tab); the column keeps its own. */
   composer?: ReactNode;
-  /** The meta line's "Send to Forge →" (the column only); absent, the chip is not drawn. */
-  onSendToForge?: () => void;
   /** D302: the workflow's agents by node id, to name a reply another node gave. */
   speakers?: ReadonlyMap<string, AgentLook>;
   /** The project, for a turn's Changes card (D300). */
@@ -338,7 +368,12 @@ export function ChatConversation({
       : speakers?.get(speakerNodeId);
   const replying = otherSpeaker(convo.replyingNodeId);
   const replyName = replying?.name ?? node.name;
-  const scroller = useRef<HTMLDivElement>(null);
+  // Any node's chat can write in the project (D302), so any turn that did offers its files.
+  const agenticForge: AgenticForge | undefined =
+    openInForge !== undefined && projectId !== undefined
+      ? { nodeId: node.id, projectId, open: openInForge }
+      : undefined;
+  const scroller = useFollowTail<HTMLDivElement>();
   const run = useNodeOverlay(node.id);
   const running = WORKING.has(run.state);
   const runText =
@@ -395,8 +430,9 @@ export function ChatConversation({
               }}
             />
           ) : message.error !== undefined ? (
+            // [audit W-15] not an alert: a failed turn read back from history is not news; the
+            // turn that has just failed is said once, by the announcement below
             <div
-              role="alert"
               data-testid="chat-error-turn"
               data-code={message.error.code}
               data-kind={message.error.kind}
@@ -445,7 +481,7 @@ export function ChatConversation({
             <>
               <Body content={message.content} />
               {!you && (
-                <TurnMeta message={message} onSendToForge={onSendToForge} onOpenRun={onOpenRun} />
+                <TurnMeta message={message} onOpenRun={onOpenRun} agenticForge={agenticForge} />
               )}
             </>
           )}
@@ -477,11 +513,14 @@ export function ChatConversation({
     );
   };
 
-  // Follow the tail as turns arrive, the reply streams, the run works and typing starts or stops.
+  // Follow the tail as turns arrive, the reply streams, the run works and typing starts or stops —
+  // [audit W-13] while the reader is at the tail; another node or thread opens at its tail.
+  const follow = scroller.follow;
+  useEffect(() => follow(true), [follow, node.id, convo.threadId]);
   useEffect(() => {
-    const element = scroller.current;
-    if (element) element.scrollTop = element.scrollHeight;
+    follow();
   }, [
+    follow,
     convo.messages.length,
     convo.streamingText,
     convo.refusal,
@@ -496,12 +535,37 @@ export function ChatConversation({
     .filter((each) => each.supersededAt === undefined)
     .at(-1)?.runId;
 
+  /*
+   * [audit W-15] The reply is said once, when it lands — not token by token, which is what a
+   * live region around the streaming text did. A thread opened or switched to says nothing.
+   */
+  const latestReply = convo.messages
+    .filter((each) => each.role !== 'user' && each.supersededAt === undefined)
+    .at(-1);
+  const [announcement, setAnnouncement] = useState('');
+  const announced = useRef<{ threadId: string | undefined; replyId: string | undefined }>({
+    threadId: convo.threadId,
+    replyId: latestReply?.id,
+  });
+  useEffect(() => {
+    const before = announced.current;
+    announced.current = { threadId: convo.threadId, replyId: latestReply?.id };
+    if (latestReply === undefined || before.threadId !== convo.threadId) return;
+    if (before.replyId === latestReply.id) return;
+    const who = otherSpeaker(latestReply.speakerNodeId)?.name ?? node.name;
+    setAnnouncement(
+      latestReply.error === undefined ? `${who} answered.` : `${who} could not answer.`,
+    );
+    // keyed on the reply's id alone: it is said once, whatever else re-renders
+  }, [convo.threadId, latestReply?.id]);
+
   const empty =
     convo.messages.length === 0 &&
     !convo.awaitingReply &&
     !running &&
     convo.refusal === undefined &&
-    convo.error === undefined;
+    convo.error === undefined &&
+    convo.loadError === undefined;
 
   return (
     <div
@@ -510,9 +574,23 @@ export function ChatConversation({
       data-node-id={node.id}
     >
       <div
-        ref={scroller}
+        ref={scroller.ref}
+        onScroll={scroller.onScroll}
         className="flex min-h-0 flex-1 flex-col gap-[20px] overflow-y-auto px-[14px] py-[16px]"
       >
+        {/* [audit W-11] a conversation that could not be read is not an empty one */}
+        {convo.loadError !== undefined && (
+          <div role="alert" data-testid="chat-load-error" className={CHAT_NOTE_CLASS}>
+            <div className={CHAT_NOTE_HEAD_CLASS}>Could not read this conversation</div>
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1">{convo.loadError.message}</p>
+              <ActionButton label="Retry" onClick={convo.loadError.retry}>
+                <Icons.RotateCcw aria-hidden size={14} />
+              </ActionButton>
+            </div>
+          </div>
+        )}
+
         {empty && (
           <p className="flex flex-1 items-center justify-center text-center text-[13px] text-[var(--muted)]">
             Chat with {node.name} — it answers with its model and goal. Run the workflow and its
@@ -537,8 +615,13 @@ export function ChatConversation({
           <RunHint runId={latestRunId} onOpenRun={onOpenRun} />
         )}
 
+        {/* [audit W-15] the text streams outside any live region; the announcement says it once */}
+        <p role="status" data-testid="chat-announce" className="sr-only">
+          {announcement}
+        </p>
+
         {convo.streamingText.length > 0 && (
-          <div aria-live="polite" data-testid="chat-streaming">
+          <div data-testid="chat-streaming">
             <Row you={false} name={replyName} speaker={replying}>
               <Body content={[{ type: 'text', text: convo.streamingText }]} />
             </Row>
@@ -546,7 +629,7 @@ export function ChatConversation({
         )}
 
         {runText.length > 0 && (
-          <div aria-live="polite" data-testid="chat-run-live">
+          <div data-testid="chat-run-live">
             <Row you={false} name={node.name}>
               <Body content={[{ type: 'text', text: runText }]} />
             </Row>
@@ -578,28 +661,50 @@ export function ChatConversation({
             className={CHAT_NOTE_CLASS}
           >
             <div className={CHAT_NOTE_HEAD_CLASS}>
-              {request.nodeName} wants to run a tool · approval needed
+              {request.nodeName} wants to run{' '}
+              {request.command === undefined ? 'a tool' : 'a command'} · approval needed
             </div>
-            <p className="whitespace-pre-wrap break-words">{request.reason}</p>
-            <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-all rounded-[6px] bg-[var(--chip)] p-[6px] font-mono text-[11px]">
-              {request.preview}
+            {request.command === undefined ? (
+              <p className="whitespace-pre-wrap break-words">{request.reason}</p>
+            ) : (
+              request.command.denylisted && (
+                <p className="font-semibold text-danger">This matches the risky-command list.</p>
+              )
+            )}
+            <pre
+              data-testid={request.command === undefined ? undefined : 'chat-approval-command'}
+              className="m-0 overflow-x-auto whitespace-pre-wrap break-all rounded-[6px] bg-[var(--chip)] p-[6px] font-mono text-[11px]"
+            >
+              {request.command?.text ?? request.preview}
             </pre>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 data-testid="chat-approval-approve"
                 onClick={() => convo.decideApproval(request, 'approve')}
-                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--ink)] px-[12px] text-[12px] font-semibold text-[var(--surface)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--ink)] px-[12px] text-[12px] font-semibold text-[var(--surface)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
               >
-                Approve
+                {request.command === undefined ? 'Approve' : 'Allow'}
               </button>
+              {request.command?.allowPrefix !== undefined && !request.command.denylisted && (
+                <button
+                  type="button"
+                  data-testid="chat-approval-always"
+                  onClick={() => convo.decideApproval(request, 'approve', true)}
+                  className="flex min-h-[28px] max-w-full cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] py-[4px] text-left text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
+                >
+                  <span className="break-all">
+                    Always allow <span className="font-mono">{request.command.allowPrefix}</span>
+                  </span>
+                </button>
+              )}
               <button
                 type="button"
                 data-testid="chat-approval-reject"
                 onClick={() => convo.decideApproval(request, 'reject')}
-                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
               >
-                Reject
+                {request.command === undefined ? 'Reject' : 'Deny'}
               </button>
             </div>
           </div>

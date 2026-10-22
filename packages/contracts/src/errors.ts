@@ -59,7 +59,8 @@ export const ROUND_4_ERROR_CODES = [
  * it is off, 403 `terminal_restricted` for a typed command when only scripts may run), a ninth
  * running process (409) and input to a process that has finished (409). Checkpoints (D300, §5): a
  * revert of a file that changed after the agent's edit (409, each path in `details`), and a
- * checkpoint action with no git to run it (503).
+ * checkpoint action with no git to run it (503), and a revert of a step whose run is still going
+ * (409 `run_active`, D379).
  */
 export const IDE_ERROR_CODES = [
   'file_changed',
@@ -74,6 +75,7 @@ export const IDE_ERROR_CODES = [
   'engine_stopping',
   'checkpoint_conflict',
   'checkpoints_unavailable',
+  'run_active',
 ] as const;
 
 /** PG-5.6 (FR-BEN-002, FR-BEN-007): a frozen task or a started experiment refuses an edit. */
@@ -83,6 +85,13 @@ export const BENCH_ERROR_CODES = [
   'bench_experiment_locked',
 ] as const;
 
+/**
+ * D388: `POST /runs/:id/continue` on a run halted the right way, but with nothing cut off to run
+ * again (409). Only ever an HTTP answer — never stored — so an older engine on the shared database
+ * never reads it.
+ */
+export const RUN_CONTINUE_ERROR_CODES = ['nothing_to_continue'] as const;
+
 export const ERROR_CODES = [
   ...ROUND_1_ERROR_CODES,
   ...ROUND_2_ERROR_CODES,
@@ -90,6 +99,7 @@ export const ERROR_CODES = [
   ...ROUND_4_ERROR_CODES,
   ...IDE_ERROR_CODES,
   ...BENCH_ERROR_CODES,
+  ...RUN_CONTINUE_ERROR_CODES,
 ] as const;
 export const ErrorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
@@ -123,9 +133,11 @@ export const ERROR_CODE_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   engine_stopping: 503,
   checkpoint_conflict: 409,
   checkpoints_unavailable: 503,
+  run_active: 409,
   bench_task_frozen: 409,
   bench_task_not_frozen: 409,
   bench_experiment_locked: 409,
+  nothing_to_continue: 409,
 };
 
 /** `details` shapes §2.3 names explicitly. */

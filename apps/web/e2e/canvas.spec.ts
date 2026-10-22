@@ -33,7 +33,7 @@ test.describe('Canvas (FR-CAN-001..007, 010)', () => {
     // the Ace UI canvas (D328, D332): light by default (D329), #f4f0ec …
     await expect(canvas).toHaveCSS('background-color', 'rgb(244, 240, 236)');
     // … and the dark canvas, #0d0c0b, with the same dotted grid, once the theme is switched
-    await page.getByRole('button', { name: 'Switch theme' }).click();
+    await page.getByRole('button', { name: 'Dark theme' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await expect(canvas).toHaveCSS('background-color', 'rgb(13, 12, 11)');
     await expect(grid).toHaveCSS('background-image', /radial-gradient/);

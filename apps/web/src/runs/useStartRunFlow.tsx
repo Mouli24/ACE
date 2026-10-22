@@ -142,7 +142,7 @@ export function OpenRunEnd({
       onClick={open.end}
       className={
         className ??
-        'flex h-7 shrink-0 cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-[8px] border border-[var(--line)] bg-transparent px-[10px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-45'
+        'flex h-7 shrink-0 cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-[8px] border border-[var(--line)] bg-transparent px-[10px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-not-allowed disabled:opacity-45'
       }
     >
       <span

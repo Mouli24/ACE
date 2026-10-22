@@ -90,6 +90,48 @@ describe('FR-SYS-007 no secrets in logs', () => {
   });
 });
 
+describe('audit P-9 a logged error keeps what it says', () => {
+  it('serialises an Error as its type, message, stack, code and cause, not {}', () => {
+    const cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:11434'), {
+      code: 'ECONNREFUSED',
+    });
+    const error = new TypeError('fetch failed', { cause });
+
+    const redacted = redactSecrets({ err: error }) as { err: Record<string, unknown> };
+
+    expect(redacted.err).toMatchObject({
+      type: 'TypeError',
+      message: 'fetch failed',
+      cause: { type: 'Error', code: 'ECONNREFUSED', message: cause.message },
+    });
+    expect(redacted.err['stack']).toContain('fetch failed');
+  });
+
+  it('masks a key in the message, the stack and the cause', () => {
+    const error = new Error(`refused ${FAKE_ANTHROPIC_KEY}`, {
+      cause: new Error(`also ${FAKE_GITHUB_TOKEN}`),
+    });
+
+    const [line] = captureLines((log) => log.warn({ err: error }, 'call failed'));
+
+    expect(line).not.toContain(FAKE_ANTHROPIC_KEY);
+    expect(line).not.toContain(FAKE_GITHUB_TOKEN);
+    const parsed = JSON.parse(line as string) as { err: Record<string, unknown> };
+    expect(parsed.err['type']).toBe('Error');
+    expect(parsed.err['message']).toContain('[REDACTED]');
+    expect(parsed.err['stack']).toContain('[REDACTED]');
+  });
+
+  it('keeps an error’s own fields, masked like any object’s', () => {
+    const error = Object.assign(new Error('nope'), { status: 401, apiKey: 'hunter2' });
+
+    const redacted = redactSecrets(error) as Record<string, unknown>;
+
+    expect(redacted['status']).toBe(401);
+    expect(redacted['apiKey']).toBe('[REDACTED]');
+  });
+});
+
 describe('FR-SYS-007 child logger per subsystem', () => {
   it('tags every line with the subsystem that wrote it', () => {
     const lines = captureLines((log) => {

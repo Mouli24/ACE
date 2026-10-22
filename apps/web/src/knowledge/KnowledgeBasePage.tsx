@@ -28,7 +28,7 @@ export function KnowledgeBasePage() {
   if (kb.isError) {
     return (
       <main data-testid="knowledge-base-page" className="h-full overflow-y-auto">
-        <p role="alert" className="mx-auto max-w-[960px] px-6 py-8 text-[13px] text-[#c94c27]">
+        <p role="alert" className="mx-auto max-w-[960px] px-6 py-8 text-[13px] text-danger">
           Knowledge base not found. <Link to="/projects">Back to projects</Link>
         </p>
       </main>

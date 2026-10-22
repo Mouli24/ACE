@@ -54,6 +54,22 @@ describe('D300 reviewing an agent change in the editor area', () => {
     expect(entry?.kind === 'file' ? entry.content : undefined).toBe('one\n');
   });
 
+  it('[audit F-3] Revert of a file the agent created asks first, from the review bar too', async () => {
+    const user = userEvent.setup();
+    const projectId = db.createProject({ name: 'Shop' }).id;
+    const seeded = checkpoints.seed(projectId, [{ path: 'src/new.ts', after: 'fresh\n' }]);
+    renderWithQuery(<EditorArea projectId={projectId} />);
+    act(() => openReview(projectId, seeded.id, 'src/new.ts'));
+
+    await user.click(await screen.findByRole('button', { name: 'Revert' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Revert new.ts?' });
+    expect(db.filesOf(projectId)['src/new.ts']?.kind).toBe('file');
+    await user.click(within(dialog).getByRole('button', { name: 'Revert and delete' }));
+    const view = screen.getByRole('region', { name: 'new.ts (agent change)' });
+    await waitFor(() => expect(within(view).getByText('reverted')).toBeInTheDocument());
+    expect(db.filesOf(projectId)['src/new.ts']).toBeUndefined();
+  });
+
   it('says a binary file has no text diff', async () => {
     const { projectId, checkpointId } = seed();
     renderWithQuery(<EditorArea projectId={projectId} />);

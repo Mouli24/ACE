@@ -73,7 +73,7 @@ describe('FR-CAN-011 ContextMenu', () => {
     expect(menu).toHaveClass('bg-[var(--surface)]');
     expect(screen.getByRole('separator')).toBeInTheDocument();
     expect(screen.getByText('⌘D')).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveClass('text-[#c94c27]');
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveClass('text-danger');
 
     await userEvent.click(screen.getByRole('menuitem', { name: /Duplicate/ }));
     expect(onDuplicate).toHaveBeenCalledTimes(1);

@@ -9,19 +9,30 @@ export interface TreeRow {
   depth: number;
 }
 
-/** The visible rows: the root's entries, and each expanded folder's entries under it, in order. */
+/** [audit F-14] An expanded folder whose entries are not there to show: still listing, or unreadable. */
+export type FolderStatus = { loading: true } | { error: unknown };
+
+/**
+ * The visible rows: the root's entries, and each expanded folder's entries under it, in order. The
+ * root's loading and error stand for the tree; an expanded folder's are in `folders` ([audit F-14]).
+ */
 export function useTreeRows(projectId: string): {
   rows: TreeRow[];
   loading: boolean;
   error: unknown;
+  folders: ReadonlyMap<string, FolderStatus>;
 } {
   const { expanded } = useProjectExplorer(projectId);
   const folders = ['', ...expanded];
   const results = useFolders(projectId, folders);
   const byFolder = new Map<string, FileEntry[]>();
+  const statuses = new Map<string, FolderStatus>();
   folders.forEach((folder, index) => {
-    const items = results[index]?.data?.items;
+    const result = results[index];
+    const items = result?.data?.items;
     if (items) byFolder.set(folder, items);
+    else if (folder !== '' && result?.error) statuses.set(folder, { error: result.error });
+    else if (folder !== '' && result?.isPending !== false) statuses.set(folder, { loading: true });
   });
   const open = new Set(expanded);
   const rows: TreeRow[] = [];
@@ -32,5 +43,10 @@ export function useTreeRows(projectId: string): {
     }
   };
   walk('', 0);
-  return { rows, loading: results[0]?.isPending ?? true, error: results[0]?.error ?? null };
+  return {
+    rows,
+    loading: results[0]?.isPending ?? true,
+    error: results[0]?.error ?? null,
+    folders: statuses,
+  };
 }

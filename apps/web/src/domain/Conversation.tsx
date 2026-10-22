@@ -463,7 +463,7 @@ function ViewEnvelope({
         type="button"
         data-testid="view-envelope"
         onClick={() => setOpen(true)}
-        className="cursor-pointer self-start rounded-[6px] border-none bg-transparent p-0 text-[12px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        className="cursor-pointer self-start rounded-[6px] border-none bg-transparent p-0 text-[12px] font-semibold text-[#e8623a] outline-none hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       >
         View envelope
       </button>
@@ -500,7 +500,7 @@ function TurnMeta({ turn }: { turn: DomainTurn }) {
       {turn.trigger !== 'dispatch' && <span>{turn.trigger} · </span>}
       <span>{turn.outcome}</span>
       {turn.durationMs !== undefined && <span> · {(turn.durationMs / 1000).toFixed(1)} s</span>}
-      {turn.error !== undefined && <span className="text-[#c94c27]"> · {turn.error}</span>}
+      {turn.error !== undefined && <span className="text-danger"> · {turn.error}</span>}
     </div>
   );
 }
@@ -537,7 +537,7 @@ function TurnFailure({
     >
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1">
-          <span className="font-bold text-[#c94c27]">Failed: </span>
+          <span className="font-bold text-danger">Failed: </span>
           {why}
         </span>
         {onRetry !== undefined && (
@@ -565,7 +565,7 @@ function TurnFailure({
           {turn.error}
         </p>
       )}
-      {refused !== undefined && <p className="text-[11.5px] text-[#c94c27]">{refused}</p>}
+      {refused !== undefined && <p className="text-[11.5px] text-danger">{refused}</p>}
     </div>
   );
 }
@@ -641,7 +641,7 @@ function WhatItDid({ turn, output }: { turn: DomainTurn; output: Part[] }) {
         aria-expanded={open}
         aria-controls={panel}
         onClick={() => setOpen(!open)}
-        className="flex cursor-pointer items-center gap-[10px] rounded-[6px] border-none bg-transparent p-0 text-left text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        className="flex cursor-pointer items-center gap-[10px] rounded-[6px] border-none bg-transparent p-0 text-left text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       >
         <span
           role="img"
@@ -739,7 +739,7 @@ function WhatItDid({ turn, output }: { turn: DomainTurn; output: Part[] }) {
 }
 
 const OPEN_CLASS =
-  'flex h-7 cursor-pointer items-center whitespace-nowrap rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] no-underline outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'flex h-7 cursor-pointer items-center whitespace-nowrap rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] no-underline outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /** An output card (D336): the file's name, where it is, and "Open →" — Forge when it is the project's. */
 function OutputCard({
@@ -871,7 +871,7 @@ function HeldActions({
         </div>
       )}
       {failure !== undefined && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           {failure}
         </p>
       )}

@@ -50,6 +50,13 @@ export const BACKUP_BLOBS_PREFIX = 'blobs/';
 /** Where the backup an import takes first is written, under the data directory. */
 export const PRE_IMPORT_BACKUP_DIR = 'backups';
 
+/**
+ * The most a backup zip may unpack to (2 GB) [audit S-9]. An import holds every entry in memory, and
+ * a zip's entries can claim a thousand times their packed size, so the claimed sizes are added up
+ * before anything is inflated and an archive over this is refused — not a crashed engine.
+ */
+export const BACKUP_MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024;
+
 const BackupManifestSchema = z.object({
   kind: z.literal(BACKUP_KIND),
   formatVersion: z.literal(BACKUP_FORMAT_VERSION),
@@ -83,6 +90,8 @@ export interface BackupStoreDeps {
    */
   exclusive: <T>(fn: () => Promise<T>) => Promise<T>;
   now?: () => Date;
+  /** Overrides {@link BACKUP_MAX_UNPACKED_BYTES}, so a test need not build a 2 GB archive. */
+  maxUnpackedBytes?: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -109,11 +118,28 @@ function isSafeBlobPath(path: string): boolean {
  * format version, from a schema this engine knows (a newer one cannot be migrated backwards), a
  * SQLite database, valid settings, and blob paths that stay inside the blobs directory.
  */
-function readBackup(bytes: Uint8Array): ParsedBackup {
+function readBackup(
+  bytes: Uint8Array,
+  maxUnpackedBytes: number = BACKUP_MAX_UNPACKED_BYTES,
+): ParsedBackup {
   let entries: Record<string, Uint8Array>;
+  let unpacked = 0;
   try {
-    entries = unzipSync(bytes);
-  } catch {
+    entries = unzipSync(bytes, {
+      // Called with each entry's claimed size before it is inflated, and fflate inflates an entry
+      // into exactly that many bytes, so the sum bounds what the import can allocate [audit S-9].
+      filter: (file) => {
+        unpacked += file.originalSize;
+        if (unpacked > maxUnpackedBytes) {
+          throw new BackupFormatError(
+            `The backup unpacks to more than ${maxUnpackedBytes} bytes, more than ACE will restore.`,
+          );
+        }
+        return true;
+      },
+    });
+  } catch (error) {
+    if (error instanceof BackupFormatError) throw error;
     throw new BackupFormatError('The file is not a zip archive, so it is not an ACE backup.');
   }
 
@@ -417,7 +443,7 @@ export function createBackupStore(deps: BackupStoreDeps): BackupStore {
     writePreImportBackup,
 
     importZip: async (bytes: Uint8Array, hooks: { beforeCopy?: () => Promise<void> } = {}) => {
-      const backup = readBackup(bytes);
+      const backup = readBackup(bytes, deps.maxUnpackedBytes);
 
       const temp = mkdtempSync(join(tmpdir(), 'ace-import-'));
       try {

@@ -13,7 +13,12 @@ import {
 
 import type { EmittedEvent } from '../../../events/index.js';
 import { newId } from '../../../ids.js';
-import type { ControlNodeRunPatch, ControlNodeRunStore, ControlRunPatch, ControlRunStore } from '../stores.js';
+import type {
+  ControlNodeRunPatch,
+  ControlNodeRunStore,
+  ControlRunPatch,
+  ControlRunStore,
+} from '../stores.js';
 
 /**
  * In-memory stores and a captured bus for the control tests.
@@ -168,13 +173,19 @@ export function createFakeStores(seed: { runs?: Run[]; nodeRuns?: NodeRun[] } = 
       runRows.set(run.id, run);
       return run;
     },
-    update: async (runId, patch) => {
+    update: async (runId, patch, guard) => {
       runPatches.push({ runId, patch });
       const current = runRows.get(runId);
       if (current === undefined) return null;
+      // [audit E-5] The compare-and-set, as the real stores do it.
+      if (guard !== undefined && !guard.ifStatus.includes(current.status)) return null;
 
-      const { pausedAt, blockedReason, ...rest } = patch;
+      const { pausedAt, blockedReason, haltReason, budgetHalt, ...rest } = patch;
       const next: Run = { ...current, ...rest };
+      if (haltReason === null) delete next.haltReason;
+      else if (haltReason !== undefined) next.haltReason = haltReason;
+      if (budgetHalt === null) delete next.budgetHalt;
+      else if (budgetHalt !== undefined) next.budgetHalt = budgetHalt;
       if (pausedAt === null) delete next.pausedAt;
       else if (pausedAt !== undefined) next.pausedAt = pausedAt;
       if (blockedReason === null) delete next.blockedReason;
@@ -196,8 +207,7 @@ export function createFakeStores(seed: { runs?: Run[]; nodeRuns?: NodeRun[] } = 
       nodeRunRows.set(nodeRun.id, nodeRun);
       return nodeRun;
     },
-    listByRun: async (runId) =>
-      [...nodeRunRows.values()].filter((row) => row.runId === runId),
+    listByRun: async (runId) => [...nodeRunRows.values()].filter((row) => row.runId === runId),
     update: async (id, patch) => {
       nodeRunPatches.push({ id, patch });
       const current = nodeRunRows.get(id);

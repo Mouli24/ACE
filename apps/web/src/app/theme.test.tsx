@@ -7,6 +7,7 @@ import {
   setThemeMode,
   useThemeMode,
 } from '../theme/mode';
+import indexHtml from '../../index.html?raw';
 import { useApplyTheme, useResolvedTheme } from './theme';
 
 describe('FR-SYS-005 D329 the theme is the ace-theme choice, default light', () => {
@@ -46,5 +47,38 @@ describe('FR-SYS-005 D329 the theme is the ace-theme choice, default light', () 
     expect(result.current).toBe('light');
     act(() => setThemeMode('dark'));
     await waitFor(() => expect(result.current).toBe('dark'));
+  });
+});
+
+describe('audit U-18 index.html sets the stored theme before the first paint', () => {
+  /** index.html's inline (non-module) script, run as the browser would before the bundle. */
+  const prePaint = new Function(
+    /<script>([\s\S]*?)<\/script>/.exec(indexHtml)?.[1] ?? 'throw new Error("no script")',
+  ) as () => void;
+  const matchMedia = window.matchMedia;
+  afterEach(() => {
+    localStorage.removeItem(THEME_KEY);
+    delete document.documentElement.dataset['theme'];
+    document.documentElement.style.colorScheme = '';
+    window.matchMedia = matchMedia;
+  });
+
+  it.each([
+    [null, 'light'],
+    ['light', 'light'],
+    ['dark', 'dark'],
+    ['nonsense', 'light'],
+  ])('ace-theme %s → %s', (stored, theme) => {
+    if (stored !== null) localStorage.setItem(THEME_KEY, stored);
+    prePaint();
+    expect(document.documentElement.dataset['theme']).toBe(theme);
+    expect(document.documentElement.style.colorScheme).toBe(theme);
+  });
+
+  it('system follows prefers-color-scheme', () => {
+    localStorage.setItem(THEME_KEY, 'system');
+    window.matchMedia = ((query: string) => ({ matches: !query.includes('light') })) as never;
+    prePaint();
+    expect(document.documentElement.dataset['theme']).toBe('dark');
   });
 });

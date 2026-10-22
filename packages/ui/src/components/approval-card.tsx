@@ -37,6 +37,13 @@ export interface ApprovalCardProps extends Omit<HTMLAttributes<HTMLElement>, 'ch
   onNoteChange?: (note: string) => void;
   onApprove: () => void;
   onReject: () => void;
+  /**
+   * D376: Always allow for a command card; offered only when `request.command.allowPrefix` is set.
+   * It has no keyboard shortcut.
+   */
+  onApproveAlways?: () => void;
+  /** The node's colour for its chip on a command card (D328); the accent when absent. */
+  nodeColor?: string;
 }
 
 /**
@@ -62,9 +69,12 @@ export function ApprovalCard({
   onNoteChange,
   onApprove,
   onReject,
+  onApproveAlways,
+  nodeColor,
   className,
   ...props
 }: ApprovalCardProps) {
+  const command = request.command;
   useEffect(() => {
     if (!keyboard || decided !== undefined || pending) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -113,20 +123,52 @@ export function ApprovalCard({
       </header>
 
       <div className="flex flex-col gap-[10px] px-[14px] py-[12px]">
-        <p className="font-machine text-[10.5px] text-[var(--muted)]">
-          {request.point} · {request.checkType} · ask user
-        </p>
+        {command === undefined ? (
+          <>
+            <p className="font-machine text-[10.5px] text-[var(--muted)]">
+              {request.point} · {request.checkType} · ask user
+            </p>
 
-        <p className="text-[13px] leading-[1.5]" data-testid="approval-reason">
-          {request.reason}
-        </p>
+            <p className="text-[13px] leading-[1.5]" data-testid="approval-reason">
+              {request.reason}
+            </p>
 
-        <pre
-          data-testid="approval-preview"
-          className="max-h-[76px] overflow-auto whitespace-pre-wrap break-words rounded-[8px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-[8px] font-machine text-[11px] text-[var(--muted)]"
-        >
-          {request.preview}
-        </pre>
+            <pre
+              data-testid="approval-preview"
+              className="max-h-[76px] overflow-auto whitespace-pre-wrap break-words rounded-[8px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-[8px] font-machine text-[11px] text-[var(--muted)]"
+            >
+              {request.preview}
+            </pre>
+          </>
+        ) : (
+          <>
+            <p className="m-0 flex items-center gap-2 text-[12px]" data-testid="approval-node">
+              <span
+                aria-hidden
+                className="h-[8px] w-[8px] shrink-0 rounded-full"
+                style={{ background: nodeColor ?? '#ef6b3f' }}
+              />
+              <span className="min-w-0 truncate font-semibold">{request.nodeName}</span>
+              <span className="text-[var(--muted)]">wants to run a command</span>
+            </p>
+            {/* The whole command, wrapped and never truncated: it is what is being allowed. */}
+            <pre
+              data-testid="approval-command"
+              className="m-0 whitespace-pre-wrap break-all rounded-[8px] border border-[var(--line)] bg-[var(--soft)] px-[10px] py-[8px] font-machine text-[12px] text-[var(--ink)]"
+            >
+              {command.text}
+            </pre>
+            {command.denylisted && (
+              <p
+                role="note"
+                data-testid="approval-denylisted"
+                className="m-0 text-[12px] font-semibold text-danger"
+              >
+                This matches the risky-command list.
+              </p>
+            )}
+          </>
+        )}
 
         {decided === undefined ? (
           <>
@@ -141,10 +183,26 @@ export function ApprovalCard({
             </label>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" disabled={pending} onClick={onApprove}>
-                Approve <kbd className="font-machine text-[10px] font-normal opacity-60">A</kbd>
+                {command === undefined ? 'Approve' : 'Allow'}{' '}
+                <kbd className="font-machine text-[10px] font-normal opacity-60">A</kbd>
               </Button>
+              {command?.allowPrefix !== undefined && !command.denylisted && onApproveAlways && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={pending}
+                  data-testid="approval-always"
+                  onClick={onApproveAlways}
+                  className="min-w-0 max-w-full"
+                >
+                  <span className="min-w-0 break-all text-left">
+                    Always allow <span className="font-machine">{command.allowPrefix}</span>
+                  </span>
+                </Button>
+              )}
               <Button size="sm" variant="secondary" disabled={pending} onClick={onReject}>
-                Reject <kbd className="font-machine text-[10px] font-normal opacity-60">R</kbd>
+                {command === undefined ? 'Reject' : 'Deny'}{' '}
+                <kbd className="font-machine text-[10px] font-normal opacity-60">R</kbd>
               </Button>
             </div>
           </>
@@ -155,7 +213,7 @@ export function ApprovalCard({
             data-decision={decided}
             className={cn(
               'text-[12px] font-semibold',
-              decided === 'approve' ? 'text-[#2f9e63]' : 'text-[#c94c27]',
+              decided === 'approve' ? 'text-[#2f9e63]' : 'text-danger',
             )}
           >
             {decided === 'approve'

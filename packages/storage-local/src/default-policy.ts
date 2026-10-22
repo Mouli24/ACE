@@ -1,5 +1,7 @@
 import {
   DEFAULT_GUARDRAIL_POLICY_NAME,
+  DEFAULT_POLICY_MAX_TOOL_CALLS,
+  PREVIOUS_POLICY_MAX_TOOL_CALLS,
   defaultGuardrailChecks,
   GuardrailPolicySchema,
   type GuardrailPolicy,
@@ -168,6 +170,96 @@ export function appendContextChecks(
         ...current.data.checks,
         ...defaultGuardrailChecks(ids).filter((check) => check.point === 'context'),
       ],
+      updatedAt: at,
+    });
+
+    if (next.isProjectDefault) clearDefault.run(row.id, row.version);
+    insert.run(
+      next.id,
+      row.workspaceId,
+      next.projectId,
+      next.name,
+      next.version,
+      next.isProjectDefault ? 1 : 0,
+      JSON.stringify(next.checks),
+      next.createdAt,
+      next.updatedAt,
+    );
+    versioned += 1;
+  }
+
+  return versioned;
+}
+
+/**
+ * D375 (agentic nodes): every policy still holding the seeded default's `max_tool_calls` cap of 25
+ * gets one more version with it at 200 — the cap a node working in the project folder needs; its
+ * own Max turns and token budget bound it. Answers how many policies it versioned.
+ *
+ * Only the seeded default is raised: a policy named "Default" whose `max_tool_calls` check still
+ * reads exactly `{ max: 25 }`. A policy someone renamed, or whose cap they set to anything else, is
+ * theirs and left alone. Versioned, never edited, for the reason `appendContextChecks` is (BR-04);
+ * the new version keeps every other check, its id and its default flag. Idempotent: once raised, a
+ * policy no longer matches.
+ */
+export function raiseDefaultToolCallCap(
+  sqlite: BetterSqlite3.Database,
+  at: Timestamp = new Date().toISOString(),
+): number {
+  const latest = sqlite
+    .prepare(
+      `SELECT g.id AS id, g.workspace_id AS workspaceId, g.project_id AS projectId, g.name AS name,
+              g.version AS version, g.is_project_default AS isProjectDefault, g.checks AS checks,
+              g.created_at AS createdAt, g.updated_at AS updatedAt
+         FROM guardrail_policies g
+        WHERE g.version = (SELECT MAX(v.version) FROM guardrail_policies v WHERE v.id = g.id)
+        ORDER BY g.id`,
+    )
+    .all() as {
+    id: string;
+    workspaceId: string;
+    projectId: string;
+    name: string;
+    version: number;
+    isProjectDefault: number;
+    checks: string;
+    createdAt: string;
+    updatedAt: string;
+  }[];
+
+  const clearDefault = sqlite.prepare(
+    `UPDATE guardrail_policies SET is_project_default = 0 WHERE id = ? AND version = ?`,
+  );
+  const insert = sqlite.prepare(INSERT_POLICY);
+  let versioned = 0;
+
+  for (const row of latest) {
+    if (row.name !== DEFAULT_GUARDRAIL_POLICY_NAME) continue;
+    const current = GuardrailPolicySchema.safeParse({
+      id: row.id,
+      projectId: row.projectId,
+      name: row.name,
+      version: row.version,
+      isProjectDefault: row.isProjectDefault === 1,
+      checks: parseJson(row.checks),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    });
+    if (!current.success) continue;
+
+    const seeded = (check: (typeof current.data.checks)[number]): boolean =>
+      check.point === 'loop' &&
+      check.type === 'max_tool_calls' &&
+      Object.keys(check.params).length === 1 &&
+      check.params['max'] === PREVIOUS_POLICY_MAX_TOOL_CALLS;
+    if (!current.data.checks.some(seeded)) continue;
+
+    const next = GuardrailPolicySchema.parse({
+      ...current.data,
+      version: current.data.version + 1,
+      checks: current.data.checks.map((check) =>
+        seeded(check) ? { ...check, params: { max: DEFAULT_POLICY_MAX_TOOL_CALLS } } : check,
+      ),
       updatedAt: at,
     });
 

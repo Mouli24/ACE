@@ -8,16 +8,7 @@ import {
 } from '@ace/ui';
 import { Link } from 'react-router-dom';
 
-/**
- * Where the gear leads (D338): the providers, the first-run wizard — a provider, then a
- * recommended template, then a first run — and Settings. The wizard is otherwise reached only by a
- * brand-new user's first visit (`HomeRedirect`).
- */
-export const SETTINGS_LINKS = [
-  { to: '/providers', label: 'Providers', testId: 'settings-menu-providers' },
-  { to: '/onboarding', label: 'Onboarding', testId: 'settings-menu-onboarding' },
-  { to: '/settings', label: 'Settings', testId: 'settings-menu-settings' },
-] as const;
+import { APP_LINKS } from './app-links';
 
 const TRIGGER: Readonly<Record<'footer' | 'corner', string>> = {
   // the 24px workspace footer, before the connection status
@@ -30,7 +21,9 @@ const TRIGGER: Readonly<Record<'footer' | 'corner', string>> = {
 
 /**
  * The settings gear in the bottom-left corner (D338): in the workspace footer on Ideate, Forge and
- * Domain, floating in the corner everywhere else. Its menu opens upward.
+ * Domain, floating in the corner everywhere else. Its menu opens upward on the app's pages (audit
+ * U-7: every one of them, from any screen — the setup wizard among them, which is otherwise reached
+ * only by a brand-new user's first visit).
  */
 export function SettingsMenu({ placement }: { placement: 'footer' | 'corner' }) {
   return (
@@ -43,7 +36,7 @@ export function SettingsMenu({ placement }: { placement: 'footer' | 'corner' }) 
           data-testid="settings-menu"
           data-placement={placement}
           className={cn(
-            'flex shrink-0 cursor-pointer items-center justify-center rounded-full border p-0 leading-none focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+            'flex shrink-0 cursor-pointer items-center justify-center rounded-full border p-0 leading-none focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]',
             TRIGGER[placement],
           )}
         >
@@ -51,11 +44,11 @@ export function SettingsMenu({ placement }: { placement: 'footer' | 'corner' }) 
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" sideOffset={6} collisionPadding={8}>
-        {SETTINGS_LINKS.map(({ to, label, testId }) => (
+        {APP_LINKS.map(({ to, label, id }) => (
           <DropdownMenuItem
             key={to}
             asChild
-            data-testid={testId}
+            data-testid={`settings-menu-${id}`}
             className="text-[var(--ink)] no-underline hover:text-[var(--ink)]"
           >
             <Link to={to}>{label}</Link>

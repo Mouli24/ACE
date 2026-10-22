@@ -5,13 +5,13 @@ import { useInRouterContext } from 'react-router-dom';
 import { SHORTCUTS, useShortcuts } from '../app/shortcuts';
 import { useLayoutStore } from '../app/stores/layout';
 import { WorkflowUndoChoice } from '../runs/UndoChoice';
-import { askAgentAboutFile, askAgentAboutSelection } from './ask-agent';
+import { askAgentAboutFile, askAgentAboutSelection, setBufferSaver } from './ask-agent';
 import { useForgeAttribution } from './attribution';
 import { saveAll, saveFile } from './editor/actions';
 import { useCloseRequest } from './editor/CloseDialogs';
+import { useCloseTabKey } from './editor/close-tab-key';
 import { EditorArea } from './editor/EditorArea';
 import { useEditorStore } from './editor/editor-store';
-import { useProjectTypes } from './editor/project-types';
 import { useEditorSync } from './editor/useEditorSync';
 import { ExplorerView } from './explorer/ExplorerView';
 import { FollowedNodeBar, useFollowedFiles } from './FollowedNode';
@@ -23,10 +23,10 @@ import { useQuickOpen } from './quick-open/quick-open-store';
 import { toggleTerminalFocused } from './terminal/focus';
 
 /**
- * Forge in the Ace UI theme's code view (D334, after D299): a fixed 248px Explorer beside the code
+ * Forge in the Ace UI theme's code view (D334, after D299): a 248px Explorer beside the code
  * column (tabs, path bar, editor), and under the code column the bottom panel with the Terminal and
  * Problems while the person has it open (Ctrl/⌘+J, Ctrl+` for the Terminal, or the footer's counts;
- * maximizable). Ctrl/⌘+B hides the Explorer, Ctrl/⌘+P opens any file; saving, Save all and closing
+ * maximizable); both resize from their edge ([audit F-7]). Ctrl/⌘+B hides the Explorer, Ctrl/⌘+P opens any file; saving, Save all and closing
  * a tab keep their keys. The chat aside and the footer are the workspace layout's, not Forge's.
  */
 export function ForgeWorkbench({
@@ -49,10 +49,14 @@ export function ForgeWorkbench({
   const followed = useFollowedFiles(workflowId, attribution);
   const routed = useInRouterContext();
   useEditorSync(projectId);
-  // D299 Phase 4: the project's sources for cross-file TypeScript, once Monaco has loaded.
-  useProjectTypes(projectId);
+  // D299 Phase 4's cross-file types load in the workflow layout, kept across modes ([audit F-6]).
   // Leaving the project stops following its Run checks (fix Minor 6).
   useEffect(() => () => stopFollowingChecks(projectId), [projectId]);
+  // [audit F-1] Ask agent saves an unsaved buffer before the agent hears of it, through Save.
+  useEffect(
+    () => setBufferSaver((owner, path) => saveFile(owner, path, queryClient)),
+    [queryClient],
+  );
   const activePath = (): string | undefined =>
     useEditorStore.getState().projects[projectId]?.active;
   useShortcuts([
@@ -79,9 +83,9 @@ export function ForgeWorkbench({
       // D302: the editor's selection, or — with no editor to ask — the active file.
       SHORTCUTS.askAgent,
       () => {
-        if (askAgentAboutSelection()) return;
+        if (askAgentAboutSelection(projectId)) return;
         const active = activePath();
-        if (active !== undefined) askAgentAboutFile(active);
+        if (active !== undefined) askAgentAboutFile(active, projectId);
       },
     ],
     [
@@ -92,14 +96,12 @@ export function ForgeWorkbench({
         void runChecks(projectId, queryClient);
       },
     ],
-    [
-      SHORTCUTS.closeTab,
-      () => {
-        const active = activePath();
-        if (active !== undefined) closeRequest.request([active]);
-      },
-    ],
   ]);
+  // Alt+W, unless the focused field means something else by it ([audit F-10]).
+  useCloseTabKey(() => {
+    const active = activePath();
+    if (active !== undefined) closeRequest.request([active]);
+  });
   const showEditor = !(panelOpen && maximized);
 
   return (

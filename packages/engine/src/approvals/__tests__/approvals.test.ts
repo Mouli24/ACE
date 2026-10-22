@@ -123,7 +123,9 @@ describe('TC-GRD-008 Approval approve', () => {
     expect(request.preview).toBe(EMAIL_TEXT);
     expect(request.reason).toContain('email');
 
-    const { decision, nodeRun } = await approvals.decide(target.nodeRunId, 'approve', 'Fine by me');
+    const { decision, nodeRun } = await approvals.decide(target.nodeRunId, 'approve', {
+      note: 'Fine by me',
+    });
 
     // FR-GRD-013: the decision is logged with its time.
     expect(decision).toMatchObject({
@@ -190,7 +192,7 @@ describe('TC-GRD-009 Approval reject', () => {
 
     const evaluation = evaluator.evaluateOutput({ target, parts: text(EMAIL_TEXT) });
     const request = await pending(approvals, target.runId);
-    await approvals.decide(target.nodeRunId, 'reject', 'Do not send personal data');
+    await approvals.decide(target.nodeRunId, 'reject', { note: 'Do not send personal data' });
 
     const outcome = await evaluation;
 

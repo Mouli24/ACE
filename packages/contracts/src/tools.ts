@@ -140,6 +140,21 @@ export const SANDBOX_LANGUAGES = ['javascript', 'python', 'shell'] as const;
 export const SandboxLanguageSchema = z.enum(SANDBOX_LANGUAGES);
 export type SandboxLanguage = z.infer<typeof SandboxLanguageSchema>;
 
+/**
+ * Whether `host` (a lower-cased URL hostname) is on an agent's `tools.allowedDomains`: equal to an
+ * entry, or a subdomain of one (`api.example.com` matches `example.com`); an empty list allows
+ * nothing (FR-GRD-007). Defined once here because two packages judge hosts with it — the
+ * `domain_allowlist` guardrail on a call's URL, and `http_request`/`web_fetch` on every redirect
+ * they follow [audit S-2] — and the two must never disagree.
+ */
+export function hostIsAllowed(host: string, allowedDomains: readonly string[]): boolean {
+  return allowedDomains.some((raw) => {
+    const domain = raw.trim().toLowerCase();
+    if (domain.length === 0) return false;
+    return host === domain || host.endsWith(`.${domain}`);
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /* Tool calls (§2.2, FR-TOOL-009)                                              */
 /* -------------------------------------------------------------------------- */
@@ -155,6 +170,9 @@ export type ToolCallStatus = z.infer<typeof ToolCallStatusSchema>;
 
 /** Long enough to read in the inspector, short enough that a result cannot be smuggled in (§2.2). */
 export const TOOL_RESULT_SUMMARY_MAX = 500;
+
+/** The most paths one ToolCall says it changed (agentic nodes, D378). */
+export const TOOL_CALL_CHANGED_PATHS_MAX = 200;
 
 /**
  * One logged call (FR-TOOL-009): what was called, with which arguments (secrets redacted by the
@@ -173,6 +191,12 @@ export const ToolCallSchema = z.strictObject({
   status: ToolCallStatusSchema,
   verdicts: z.array(VerdictSchema),
   at: TimestampSchema,
+  /**
+   * D378: the project files an agentic node's call changed — a write tool's `path`, a
+   * `run_command`'s detected `changedPaths` — project-relative with `/` separators. Absent on every
+   * other call, and on every call stored before agentic nodes.
+   */
+  changedPaths: z.array(z.string().min(1)).max(TOOL_CALL_CHANGED_PATHS_MAX).optional(),
 });
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 

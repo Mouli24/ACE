@@ -1,7 +1,8 @@
 import { rosterFor, type Id } from '@ace/contracts';
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 
+import { useFollowTail } from '../chat/follow-tail';
 import { workflowPath } from '../forge/mode';
 import { useNodeRuns, useRun } from '../runs/hooks';
 import { useSelectedRun } from '../runs/selected-run';
@@ -41,11 +42,11 @@ export function RunConversationTab({
   );
   const looks = useMemo(() => domainLooks(run.data?.snapshot.nodes ?? []), [run.data]);
 
-  const scroller = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const element = scroller.current;
-    if (element !== null) element.scrollTop = element.scrollHeight;
-  }, [messages, conversation.tokens]);
+  // [audit W-13] follow the conversation only while the reader is at its tail
+  const scroller = useFollowTail<HTMLDivElement>();
+  const follow = scroller.follow;
+  useLayoutEffect(() => follow(true), [follow, runId]);
+  useLayoutEffect(() => follow(), [follow, messages, conversation.tokens]);
 
   const domainHref =
     runId === undefined
@@ -63,14 +64,18 @@ export function RunConversationTab({
         <Link
           to={domainHref}
           data-testid="chat-run-open-domain"
-          className="shrink-0 font-semibold text-[#e8623a] hover:text-[#c94c27]"
+          className="shrink-0 font-semibold text-[#e8623a] hover:text-danger"
         >
           Open in Domain →
         </Link>
       </div>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={scroller.ref}
+        onScroll={scroller.onScroll}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
         {conversation.error !== undefined && (
-          <p role="alert" className="px-[14px] pt-3 text-center text-[12px] text-[#c94c27]">
+          <p role="alert" className="px-[14px] pt-3 text-center text-[12px] text-danger">
             {conversation.error}
           </p>
         )}

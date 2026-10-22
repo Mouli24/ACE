@@ -1,4 +1,11 @@
-import type { Id, Model, ModelQuery, Provider, UpdateProviderRequest } from '@ace/contracts';
+import type {
+  Id,
+  ModelCapabilitiesPatch,
+  ModelQuery,
+  Provider,
+  UpdateProviderRequest,
+  WorkflowGraphResponse,
+} from '@ace/contracts';
 import type { CreateProviderBody } from '@ace/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -92,15 +99,45 @@ export function useRefreshModels() {
   });
 }
 
-/** Group a catalog by provider id, so a table can show provider names beside their models. */
-export function modelsByProvider(models: Model[]): Map<Id, Model[]> {
-  const grouped = new Map<Id, Model[]>();
-  for (const model of models) {
-    const list = grouped.get(model.providerId);
-    if (list) list.push(model);
-    else grouped.set(model.providerId, [model]);
-  }
-  return grouped;
+/** `PATCH /providers/:id/models/:modelId` (D380): the person's say on a model's tools and window. */
+export function usePatchModelCapabilities() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { providerId: Id; modelId: string; patch: ModelCapabilitiesPatch }) =>
+      api().patchModelCapabilities(input.providerId, input.modelId, input.patch),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.modelsRoot() });
+    },
+  });
+}
+
+/**
+ * [audit P-20] Names for nodes the engine named only by id — the 409 of a provider removal
+ * (FR-PRV-005). Each workflow is read (from the cache when it is there) until every id is found, as
+ * "Node — Workflow"; an id that is never found has no entry, and the screen shows the id alone.
+ */
+export function useNodeNames(nodeIds: readonly Id[]) {
+  const queryClient = useQueryClient();
+  const wanted = [...new Set(nodeIds)].sort();
+  return useQuery({
+    queryKey: ['provider-in-use-nodes', wanted],
+    enabled: wanted.length > 0,
+    queryFn: async (): Promise<Map<Id, string>> => {
+      const names = new Map<Id, string>();
+      for (const project of (await api().listProjects()).items) {
+        for (const workflow of (await api().listWorkflows(project.id)).items) {
+          const graph =
+            queryClient.getQueryData<WorkflowGraphResponse>(queryKeys.workflow(workflow.id)) ??
+            (await api().getWorkflow(workflow.id));
+          for (const node of graph.nodes) {
+            if (wanted.includes(node.id)) names.set(node.id, `${node.name} — ${workflow.name}`);
+          }
+          if (names.size === wanted.length) return names;
+        }
+      }
+      return names;
+    },
+  });
 }
 
 /**

@@ -23,7 +23,7 @@ export function TimelineTab({ workflowId, projectId }: { workflowId: string; pro
         <div className="flex items-center justify-end px-3 pt-2">
           <Link
             to={`/projects/${projectId}/workflows/${workflowId}/timeline`}
-            className="inline-flex items-center gap-[5px] rounded-[4px] text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="inline-flex items-center gap-[5px] rounded-[4px] text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]"
             data-testid="timeline-open-full"
           >
             <span aria-hidden>⛶</span>

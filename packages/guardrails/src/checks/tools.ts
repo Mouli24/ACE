@@ -15,7 +15,7 @@
  * the reasons name the tool, the offending field, or the host, never the value the model passed.
  */
 
-import type { JsonSchema, ToolDefinition } from '@ace/contracts';
+import { hostIsAllowed, type JsonSchema, type ToolDefinition } from '@ace/contracts';
 
 import type { CheckResult, GuardrailInput } from '../types.js';
 
@@ -180,7 +180,8 @@ const URL_KEY = 'url';
  * that cannot be read cannot be allow-listed. A call with no `url` argument has nothing to judge and
  * passes. On the default policy a failure is a `block`.
  *
- * A host matches an entry exactly, or as a subdomain of it (`api.example.com` matches `example.com`).
+ * A host matches an entry exactly, or as a subdomain of it (`api.example.com` matches `example.com`)
+ * — the contract's `hostIsAllowed`, which `http_request`/`web_fetch` re-run on every redirect.
  */
 export function checkDomainAllowlist(input: GuardrailInput): CheckResult | undefined {
   const tool = input.tool;
@@ -215,14 +216,6 @@ function hostOf(url: string): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function hostIsAllowed(host: string, allowedDomains: readonly string[]): boolean {
-  return allowedDomains.some((raw) => {
-    const domain = raw.trim().toLowerCase();
-    if (domain.length === 0) return false;
-    return host === domain || host.endsWith(`.${domain}`);
-  });
 }
 
 /* -------------------------------------------------------------------------- */

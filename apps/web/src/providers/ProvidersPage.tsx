@@ -84,7 +84,7 @@ export function ProvidersPage() {
               <p className="text-[13px] text-[var(--muted)]">Loading providers…</p>
             )}
             {providers.isError && (
-              <p role="alert" className="text-[12px] text-[#c94c27]">
+              <p role="alert" className="text-[12px] text-danger">
                 Could not load providers: {providers.error.message}
               </p>
             )}
@@ -190,6 +190,11 @@ function ProviderRow({
   children?: ReactNode;
 }) {
   const check = useCheckProvider();
+  // [audit P-7] Why a checked provider is not connected, said in the row — not only in a tooltip.
+  const why =
+    provider.lastCheckedAt !== undefined && provider.status !== 'CONNECTED'
+      ? provider.statusMessage
+      : undefined;
 
   return (
     <li
@@ -208,6 +213,14 @@ function ProviderRow({
           {PROVIDER_TYPE_LABEL[provider.type]}
           {provider.baseUrl ? ` · ${provider.baseUrl}` : ''} · {provider.concurrency} concurrent
         </p>
+        {why !== undefined && why !== '' && (
+          <p
+            data-testid={`provider-status-message-${provider.id}`}
+            className="mt-[3px] line-clamp-2 break-words text-[11px] leading-[1.45] text-danger"
+          >
+            {why}
+          </p>
+        )}
       </div>
 
       {isCliProviderType(provider.type) ? (
@@ -243,9 +256,10 @@ function ProviderRow({
         variant="secondary"
         size="sm"
         disabled={check.isPending}
+        aria-busy={check.isPending}
         onClick={() => check.mutate(provider.id)}
       >
-        Test
+        {check.isPending ? 'Testing…' : 'Test'}
       </Button>
 
       <DropdownMenu>
@@ -253,7 +267,7 @@ function ProviderRow({
           <button
             type="button"
             aria-label={`Actions for ${provider.name}`}
-            className="grid h-6 cursor-pointer place-items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]"
+            className="grid h-6 cursor-pointer place-items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)]"
           >
             <Icons.Ellipsis aria-hidden size={14} />
           </button>
@@ -267,6 +281,16 @@ function ProviderRow({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {/* [audit P-7] A Test the engine could not run says so, rather than nothing happening. */}
+      {check.isError && (
+        <p
+          role="alert"
+          data-testid={`provider-check-error-${provider.id}`}
+          className="basis-full text-[11px] leading-[1.45] text-danger"
+        >
+          Test failed: {check.error.message}
+        </p>
+      )}
       {children !== undefined && children !== false && (
         <div className="basis-full pl-[32px]">{children}</div>
       )}

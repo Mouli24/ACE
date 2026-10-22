@@ -25,6 +25,7 @@ import type { Logger } from '../logging/index.js';
 import type { ProcessRunner, Repository, RunningProcess, Scope } from '../ports/index.js';
 import {
   agentCommandReadOnly,
+  agentCommandStopRun,
   processLimit,
   engineStopping,
   processNotRunning,
@@ -80,6 +81,10 @@ export interface AgentCommandSpec {
   command: string;
   /** Project-relative, as the list shows it (`''` for the root). */
   cwd: string;
+  /** `run_command` with `background: true` (Task 14): such a row can be killed from Forge. */
+  background: boolean;
+  /** The background command's id in the run's agent session; never sent over the wire. */
+  sessionProcessId?: string;
 }
 
 /** PG-5.3: an agent's command reporting in as it runs. */
@@ -112,6 +117,11 @@ export interface ProcessServiceDeps {
    * is logged and changes nothing about the process.
    */
   onPersonCommand?: (projectId: Id, processId: Id, running: boolean) => void;
+  /**
+   * Task 14: kills a run's background agent command by its id in the run's agent session (the
+   * session lives in the server, which owns `@ace/tools`). Absent, Stop on any agent row refuses.
+   */
+  killAgentCommand?: (runId: Id, sessionProcessId: string) => Promise<boolean>;
 }
 
 /**
@@ -129,6 +139,8 @@ interface Chunk {
 
 interface Supervised {
   summary: ProcessSummary;
+  /** Task 14: a background agent command's id in its run's agent session. */
+  sessionProcessId?: string;
   /** Start order: "newest first" even when two start in the same millisecond. */
   order: number;
   /** Set when it ends; the recent list drops the lowest first. */
@@ -460,8 +472,18 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
 
     async stop(projectId, processId) {
       const record = find(projectId, processId);
-      if (record.summary.agent !== undefined && record.summary.status === 'running') {
-        throw agentCommandReadOnly(processId);
+      const agent = record.summary.agent;
+      if (agent !== undefined && record.summary.status === 'running') {
+        // Task 14: a background command can be killed from Forge; a foreground one is its run's.
+        if (
+          !agent.background ||
+          record.sessionProcessId === undefined ||
+          deps.killAgentCommand === undefined
+        ) {
+          throw agentCommandStopRun(processId);
+        }
+        await deps.killAgentCommand(agent.runId, record.sessionProcessId);
+        return;
       }
       // Idempotent: a finished process is already stopped.
       if (record.summary.status === 'running') record.handle?.stop();
@@ -515,7 +537,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
         exitCode: null,
         signal: null,
         startedAt: now(),
-        agent: { runId: spec.runId, nodeId: spec.nodeId },
+        agent: { runId: spec.runId, nodeId: spec.nodeId, background: spec.background },
       };
       let markEnded: () => void = () => undefined;
       const ended = new Promise<void>((resolve) => {
@@ -529,6 +551,7 @@ export function createProcessService(deps: ProcessServiceDeps): ProcessService {
         output: '',
         truncated: false,
         handle: undefined,
+        ...(spec.sessionProcessId === undefined ? {} : { sessionProcessId: spec.sessionProcessId }),
         batcher: createBatcher<Chunk>({ intervalMs: batchMs, flush: flushTo(summary) }),
         ended,
         markEnded,

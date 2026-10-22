@@ -13,6 +13,7 @@ import { useEditorStatus } from './editor-status';
 import { applyForgeTheme } from './forge-theme';
 import { configureLanguageDefaults } from './language-defaults';
 import { languageOf } from './languages';
+import { registerPythonLanguage } from './python-language';
 import { watchMarkers } from '../panel/problems-store';
 import {
   ensureModel,
@@ -26,6 +27,8 @@ import {
 setMonaco(monaco);
 // TS/JS and JSON set for real projects before the first model exists (review I3).
 configureLanguageDefaults(monaco);
+// Python from the project's Pyright language server in the engine, as Pylance gives it in VS Code.
+registerPythonLanguage(monaco);
 // Problems follows every Forge model's markers from the moment the editor chunk loads (6.4).
 watchMarkers(monaco);
 
@@ -120,7 +123,7 @@ export function EditorHost({ projectId, path, initial, touch }: EditorHostProps)
       contextMenuGroupId: 'navigation',
       contextMenuOrder: 0,
       run: () => {
-        askAgentAboutSelection();
+        askAgentAboutSelection(shown.current?.projectId);
       },
     });
     return () => {
@@ -168,7 +171,10 @@ export function EditorHost({ projectId, path, initial, touch }: EditorHostProps)
     shown.current = { projectId, path };
     const view = viewStateOf(projectId, path);
     if (view !== null) editor.restoreViewState(view);
-    editor.focus();
+    // a Space preview in the Explorer keeps the focus on its row, this once ([audit F-11])
+    if (useEditorStore.getState().projects[projectId]?.focusOnShow === false) {
+      useEditorStore.getState().focusDone(projectId);
+    } else editor.focus();
     // Read after loaded(): the store's default bom is false, so a render-time value would hide the
     // BOM of the content just loaded.
     const loadedBom = useEditorStore.getState().projects[projectId]?.files[path]?.bom ?? false;

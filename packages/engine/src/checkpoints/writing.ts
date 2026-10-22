@@ -1,5 +1,6 @@
 import {
   DEFAULT_CLI_PERMISSION,
+  agentToolNames,
   isCliProviderType,
   type Node,
   type Provider,
@@ -10,7 +11,9 @@ import {
  * before it may change the project, or which stops and asks "Run without undo / Cancel".
  *
  * A node writes when it can change the project folder: an agent with a project-writing tool
- * enabled, or a node on a coding-agent CLI whose permission preset lets it edit. A node with no
+ * enabled — or, with workspace access, granted by its access level (D375: `agentToolNames`, which
+ * is `tools.enabled` unchanged for an Off node) — or a node on a coding-agent CLI whose permission
+ * preset lets it edit. A node with no
  * such tool and an API or local model only reads, so a checkpoint that cannot begin is logged and
  * the run goes on (D300's original rule, kept for it).
  */
@@ -38,7 +41,7 @@ export function nodeWrites(
   if (node.kind !== 'agent' && node.kind !== 'model') return false;
   if (
     node.kind === 'agent' &&
-    node.config.tools.enabled.some((name) => PROJECT_WRITING_TOOLS.includes(name))
+    agentToolNames(node.config).some((name) => PROJECT_WRITING_TOOLS.includes(name))
   ) {
     return true;
   }

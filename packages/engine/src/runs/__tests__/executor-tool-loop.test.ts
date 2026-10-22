@@ -379,6 +379,27 @@ describe('agentic nodes: a tool call carries the node that made it', () => {
     expect(contexts[0]?.nodeId).toBe(node.id);
     expect(contexts[0]?.runId).toBeDefined();
   });
+
+  it("passes the node's allowedDomains, which the network tools re-check on each redirect [audit S-2]", async () => {
+    const contexts: ToolRunContext[] = [];
+    const echo: ExecutableTool = {
+      definition: echoDefinition,
+      async run(_args, context) {
+        contexts.push(context);
+        return { text: 'echoed hi' };
+      },
+    };
+    const harness = await buildHarness({
+      turns: (req) => (req.toolResults?.length ? say('done') : requestEcho()),
+      tools: toolProvider([echo]),
+      beforeTool: async () => ({ kind: 'allow' }),
+      maxToolCalls: 10,
+    });
+
+    await runInput(harness, agentNode({ tools: { enabled: ['echo'], maxToolCalls: 10, allowedDomains: ['example.com'] } }));
+
+    expect(contexts[0]?.allowedDomains).toEqual(['example.com']);
+  });
 });
 
 describe('TC-TOOL-002 a tool the tool point blocks fails the node GUARDRAIL_VIOLATION', () => {

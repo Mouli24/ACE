@@ -28,7 +28,7 @@ export function useFollowedFiles(
 }
 
 const CHIP =
-  'flex h-[22px] shrink-0 cursor-pointer items-center gap-[5px] rounded-full border border-[var(--line)] bg-transparent px-[8px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'flex h-[22px] shrink-0 cursor-pointer items-center gap-[5px] rounded-full border border-[var(--line)] bg-transparent px-[8px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * PG-3.4: a slim bar over the editor while a node is followed into Forge — who it is, the model it
@@ -87,7 +87,7 @@ export function FollowedNodeBar({
         aria-label="Stop following"
         title="Stop following"
         onClick={stop}
-        className="flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-[6px] border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        className="flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-[6px] border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       >
         <Icons.X aria-hidden size={12} />
       </button>

@@ -60,13 +60,17 @@ export function useSkills(): Skill[] {
 export function SkillsField({
   skills,
   tools,
+  hide = [],
   onChange,
 }: {
   skills: readonly Skill[];
+  /** Skill ids not shown: Files and Shell, once the node has workspace access (D342). */
+  hide?: readonly string[];
   tools: ToolsConfig;
   onChange: (tools: ToolsConfig) => void;
 }) {
-  if (skills.length === 0) return null;
+  const shown = skills.filter((skill) => !hide.includes(skill.id));
+  if (shown.length === 0) return null;
 
   const toggle = (skill: Skill, on: boolean) => {
     const rest = tools.enabled.filter((name) => !skill.tools.includes(name));
@@ -83,7 +87,7 @@ export function SkillsField({
         aria-labelledby="agent-skills-label"
         className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-2"
       >
-        {skills.map((skill) => {
+        {shown.map((skill) => {
           const on = skill.tools.every((name) => tools.enabled.includes(name));
           return (
             <button
@@ -93,7 +97,7 @@ export function SkillsField({
               aria-checked={on}
               data-testid={`skill-${skill.id}`}
               onClick={() => toggle(skill, !on)}
-              className="flex cursor-pointer items-center gap-2.5 rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-2.5 text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]"
+              className="flex cursor-pointer items-center gap-2.5 rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-2.5 text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)]"
             >
               <div className="min-w-0 flex-1">
                 <div className="text-[12.5px] font-semibold">{skill.label}</div>
@@ -104,7 +108,7 @@ export function SkillsField({
           );
         })}
       </div>
-      {skills.some(
+      {shown.some(
         (skill) =>
           skill.id === 'shell' && skill.tools.every((name) => tools.enabled.includes(name)),
       ) && (

@@ -1,5 +1,6 @@
 import type { FailureReason, Id, NodeError, NodeState } from '@ace/contracts';
 import { Badge, Button, Icons, StatusRing } from '@ace/ui';
+import type { ReactNode } from 'react';
 
 import { ERROR_KIND_LABEL, NEXT_STEP_BY_ERROR_KIND } from './next-steps';
 
@@ -34,6 +35,14 @@ export interface ErrorCardProps {
   retrying?: boolean;
   /** Select the node on the Canvas, so "open the node settings" has a where. */
   onShowNode?: () => void;
+  /**
+   * [audit L-13] A line under the next step about the node as it is now — on the Canvas, that it
+   * changed since the run started, so Retry (which re-runs the run's snapshot, BR-04) would not
+   * pick the change up.
+   */
+  notice?: ReactNode;
+  /** [audit L-13] More actions beside Retry, such as "Run again with changes". */
+  actions?: ReactNode;
 }
 
 export function ErrorCard({
@@ -47,6 +56,8 @@ export function ErrorCard({
   onRetry,
   retrying,
   onShowNode,
+  notice,
+  actions,
 }: ErrorCardProps) {
   const provider = providerName ?? error.providerId;
   return (
@@ -86,17 +97,20 @@ export function ErrorCard({
         {NEXT_STEP_BY_ERROR_KIND[error.kind]}
       </p>
 
+      {notice}
+
       <footer className="flex flex-wrap items-center gap-3">
         {onRetry && (
           <Button size="sm" variant="secondary" onClick={onRetry} disabled={retrying}>
             <Icons.RotateCw aria-hidden size={12} /> Retry
           </Button>
         )}
+        {actions}
         {onShowNode && (
           <button
             type="button"
             onClick={onShowNode}
-            className="cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             show node
           </button>

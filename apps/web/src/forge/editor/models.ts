@@ -148,17 +148,38 @@ export function markSaved(projectId: string, path: string, alt?: number): void {
   entry.onDirty(entry.model.getAlternativeVersionId() !== entry.savedAlt);
 }
 
-/** The buffer takes the disk's text (a clean buffer following the disk, or Take theirs); it is clean after. */
+/**
+ * The buffer takes the disk's text (a clean buffer following the disk, or Take theirs); it is clean
+ * after. [audit F-2] As one undoable edit over the whole text, never `setValue`: the person keeps
+ * their undo history (Take theirs can be undone back to their text) and the editor showing the
+ * file keeps its cursor and scroll. The disk's line endings come first, as an undoable step too, so
+ * the next save writes the ones the disk has.
+ */
 export function replaceContent(projectId: string, path: string, content: string): void {
   const entry = entries.get(keyOf(projectId, path));
   if (entry === undefined) return;
-  if (entry.model.getValue() !== content) {
+  const { model } = entry;
+  if (model.getValue() !== content) {
+    const editor = editorFor(projectId, path);
+    const view = editor?.saveViewState() ?? null;
     entry.syncing = true;
     try {
-      entry.model.setValue(content);
+      model.pushStackElement();
+      const crlf = content.includes('\r\n');
+      if (monaco !== undefined && model.getEOL() !== (crlf ? '\r\n' : '\n')) {
+        const { CRLF, LF } = monaco.editor.EndOfLineSequence;
+        model.pushEOL(crlf ? CRLF : LF);
+      }
+      model.pushEditOperations(
+        [],
+        [{ range: model.getFullModelRange(), text: content }],
+        () => null,
+      );
+      model.pushStackElement();
     } finally {
       entry.syncing = false;
     }
+    if (view !== null) editor?.restoreViewState(view);
   }
   markSaved(projectId, path);
 }
@@ -215,6 +236,14 @@ export function disposeModel(projectId: string, path: string): void {
   if (!entry.model.isDisposed()) entry.model.dispose();
   entries.delete(key);
   announce(projectId, path, false);
+}
+
+/** [audit F-13] A deleted project's models all go, with their unsaved text and places. */
+export function disposeProject(projectId: string): void {
+  for (const key of [...entries.keys()]) {
+    const [owner, path = ''] = key.split('\u0000');
+    if (owner === projectId) disposeModel(projectId, path);
+  }
 }
 
 /** Tests only. */

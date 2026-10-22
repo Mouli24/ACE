@@ -3,11 +3,13 @@ import type { ProviderType } from '@ace/contracts';
 
 import type { ModelInfo, ProviderAdapter } from '../adapter.js';
 import {
+  byChatName,
   createAiSdkAdapter,
   discoveredModel,
   embedOpenAiStyle,
   getJson,
   statusFromProbe,
+  withFamilyDefaults,
   type FetchLike,
 } from './ai-sdk.js';
 
@@ -26,14 +28,19 @@ export interface OpenAiCompatibleOptions {
   type?: ProviderType;
 }
 
-/** `{ data: [{ id }] }` — the listing shape every OpenAI-compatible server returns. */
+/**
+ * `{ data: [{ id }] }` — the listing shape every OpenAI-compatible server returns. It says nothing
+ * about what a model does, so an embedder, a speech or an image model is told apart by its name
+ * and kept unavailable for nodes [audit P-6], and a well-known chat family gets its defaults
+ * [audit P-2].
+ */
 export function parseOpenAiModelList(body: unknown): ModelInfo[] {
   const data = (body as { data?: unknown }).data;
   if (!Array.isArray(data)) return [];
 
   return data.flatMap((entry): ModelInfo[] => {
     const id = (entry as { id?: unknown }).id;
-    return typeof id === 'string' ? [discoveredModel(id)] : [];
+    return typeof id === 'string' ? [withFamilyDefaults(byChatName(discoveredModel(id)))] : [];
   });
 }
 
@@ -42,14 +49,28 @@ export function normaliseBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
+/** A path that already names the API version: `/v1`, `/v2`, `/api/v1`, `/openai/v1`, `/v1beta/openai`. */
+const VERSIONED_PATH = /\/v\d+(?:alpha|beta)?\d*(?:\/openai)?$/i;
+
+/**
+ * The API root a base URL stands for [audit P-4]. A URL that already ends in a version — what most
+ * servers print as "the base URL" — is the root as it is, so `…/v1` no longer becomes `…/v1/v1`.
+ * Any other gets `/v1`, which is how every base URL was read before: a stored
+ * `http://127.0.0.1:1234` keeps working.
+ */
+export function openAiApiRoot(baseUrl: string): string {
+  const url = normaliseBaseUrl(baseUrl);
+  return VERSIONED_PATH.test(url) ? url : `${url}/v1`;
+}
+
 export function createOpenAiCompatibleAdapter(options: OpenAiCompatibleOptions): ProviderAdapter {
-  const baseUrl = normaliseBaseUrl(options.baseUrl);
+  const apiRoot = openAiApiRoot(options.baseUrl);
   const headers: Record<string, string> =
     options.apiKey === undefined || options.apiKey === ''
       ? {}
       : { Authorization: `Bearer ${options.apiKey}` };
 
-  const listUrl = `${baseUrl}/v1/models`;
+  const listUrl = `${apiRoot}/models`;
   const probe = async (): Promise<unknown> =>
     getJson({
       url: listUrl,
@@ -58,7 +79,7 @@ export function createOpenAiCompatibleAdapter(options: OpenAiCompatibleOptions):
     });
 
   const provider = createOpenAI({
-    baseURL: `${baseUrl}/v1`,
+    baseURL: apiRoot,
     // The SDK insists on a key; a local server ignores whatever is sent.
     apiKey: options.apiKey ?? 'not-required',
     ...(options.fetchImpl === undefined ? {} : { fetch: options.fetchImpl as typeof fetch }),
@@ -72,6 +93,6 @@ export function createOpenAiCompatibleAdapter(options: OpenAiCompatibleOptions):
     check: () => statusFromProbe(probe),
     listModels: async () => parseOpenAiModelList(await probe()),
     embed: (texts, embedOptions) =>
-      embedOpenAiStyle(baseUrl, headers, options.fetchImpl, texts, embedOptions),
+      embedOpenAiStyle(apiRoot, headers, options.fetchImpl, texts, embedOptions),
   });
 }

@@ -8,6 +8,9 @@ import { useSettings } from '../settings/hooks';
  * brand-new user, who has finished no onboarding and has no project yet: they go to the first-run
  * wizard (FR-ONB-001, Arch §33.1 step 2). Anyone with a project, or who finished or skipped the
  * wizard, keeps the old behaviour.
+ *
+ * Audit U-4: the engine keeps `lastProjectId` after that project is deleted, so it is followed only
+ * while it is still in the project list; otherwise `/` would open a "Project not found" page.
  */
 export function HomeRedirect() {
   const settings = useSettings();
@@ -16,7 +19,9 @@ export function HomeRedirect() {
     return <p className="p-6 text-center text-[13px] text-[var(--muted)]">Opening ACE…</p>;
   }
   const last = settings.data?.lastProjectId;
-  if (last) return <Navigate to={`/projects/${last}`} replace />;
+  if (last && projects.data?.some((project) => project.id === last)) {
+    return <Navigate to={`/projects/${last}`} replace />;
+  }
   const fresh = settings.data?.onboardingCompleted === false && (projects.data?.length ?? 0) === 0;
   return <Navigate to={fresh ? '/onboarding' : '/projects'} replace />;
 }

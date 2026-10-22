@@ -28,8 +28,11 @@
   --color-fg-faint: var(--muted);
   --color-accent: var(--ink);
   --color-accent-fg: var(--canvas);
-  --color-danger: #c94c27;
+  /* audit U-5: text-danger and friends read in the AA ink (#c94c27 was 4.07:1 on the canvas) */
+  --color-danger: var(--danger-ink);
   --color-selection: #ef6b3f;
+  /* audit U-6: the keyboard focus colour, >= 3:1 on canvas, card and panel in both themes */
+  --color-focus: var(--focus);
 
   --color-provider-anthropic: #c2603f;
   --color-provider-google: #1d4fe0;
@@ -100,9 +103,6 @@
   --edgeGlow: 0.08;
 
   --color-minimap-mask: rgba(244, 240, 236, 0.7);
-  --ace-glow-k: 0.5;
-  --ace-hi: #ffffffcc;
-  --ace-ground: 0 6px 18px -10px #1b1a1e40;
   --color-chart-1: #e8572e;
   --color-chart-2: #7a62d6;
   --color-chart-3: #1f97a3;
@@ -121,6 +121,8 @@
   --accent-ink: #b4441b;
   --accent-strong: #c2410c;
   --ok-ink: #1a6b3f;
+  /* Audit U-6: the focus ring (#ef6b3f is 2.71:1 on the light canvas; WCAG 1.4.11 asks 3:1). */
+  --focus: #c2410c;
 
   /* PG-1.1 (D350): port dots by data type, each >= 3:1 on card, panel and canvas (tokens.ts). */
   --port-text: #c2410c;
@@ -160,13 +162,11 @@
   --edgeGlow: 0.18;
 
   --color-minimap-mask: rgba(13, 12, 11, 0.7);
-  --ace-glow-k: 1;
-  --ace-hi: #ffffff10;
-  --ace-ground: 0 8px 24px -12px #000000cc;
   --danger-ink: #ef7a5a;
   --accent-ink: #f08a5d;
   --accent-strong: #c2410c;
   --ok-ink: #4cc283;
+  --focus: #ef6b3f;
   --port-text: #f08a5d;
   --port-image: #a996f0;
   --port-audio: #4fc3cc;
@@ -208,8 +208,6 @@
   --surface: #fff;
   --soft: rgba(255, 255, 255, 0.7);
   --hover: #f3efeb;
-  --btn: #1f1d1b;
-  --btnInk: #fff;
   --dot: rgba(80, 80, 90, 0.18);
   --glow: rgba(239, 107, 63, 0.1);
   --ring6: rgba(255, 255, 255, 0.55);
@@ -226,8 +224,6 @@
   --surface: #1d1b1a;
   --soft: rgba(255, 255, 255, 0.05);
   --hover: #2a2725;
-  --btn: #f2eee9;
-  --btnInk: #1a1817;
   --dot: rgba(255, 255, 255, 0.08);
   --glow: rgba(239, 107, 63, 0.16);
   --ring6: rgba(255, 255, 255, 0.03);
@@ -286,18 +282,23 @@
 }
 
 @layer base {
-  /* The theme's body: the workspace sits on #0d0c0b, Home on #151413 (with its transition). */
+  /* The theme's body: the workspace sits on its canvas (#0d0c0b dark), Home on #151413 dark (with
+     its transition). Audit U-18: in light the boot screen is light too — it was always the dark
+     #0d0c0b until the app drew over it; index.html sets data-theme before the first paint. */
   /* The theme sets no line-height; Tailwind's preflight would make it 1.5. */
   html,
   body {
-    background-color: #0d0c0b;
+    background-color: var(--canvas);
     color: var(--ink);
     font-family: var(--font-human);
     line-height: normal;
   }
   body:has([data-surface='home']) {
-    background-color: #151413;
+    background-color: #f5f2f0;
     transition: background 0.3s;
+  }
+  :root[data-theme='dark'] body:has([data-surface='home']) {
+    background-color: #151413;
   }
   /* PG-1.2 (D360): links in the AA accent (#e8623a measured 2.96:1 on the light canvas). */
   a {
@@ -412,11 +413,6 @@
   animation: flow 1.2s linear infinite;
 }
 
-@keyframes ace-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @keyframes ace-pulse {
   0%,
   100% {
@@ -426,18 +422,25 @@
     opacity: 0.35;
   }
 }
-.ace-spin {
-  animation: ace-spin 0.9s linear infinite;
-}
 .ace-pulse {
   animation: ace-pulse 1.2s ease-in-out infinite;
 }
 
-/* Reduced motion keeps the dashes, the spinner and the pulse still (NFR-USE-02). */
+/* Reduced motion keeps the dashes and the pulse still (NFR-USE-02). */
 @media (prefers-reduced-motion: reduce) {
   .ace-edge-flow,
-  .ace-spin,
   .ace-pulse {
     animation: none;
+  }
+  /*
+   * Audit U-12: and every other animation — the live dots, the orbiting tiles, Tailwind's
+   * animate-* — runs once, at once, and rests on its last frame instead of looping.
+   */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
   }
 }

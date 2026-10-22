@@ -6,6 +6,7 @@ import {
   NodeErrorPayloadSchema,
   NodeOutputPayloadSchema,
   NodeStatePayloadSchema,
+  NodeTurnPayloadSchema,
   PERSISTED_RUN_EVENT_TYPES,
   TRACE_ENTRY_KIND_BY_EVENT_TYPE,
   ToolCallPayloadSchema,
@@ -73,6 +74,19 @@ function describeEvent(
     case 'node.error': {
       const parsed = NodeErrorPayloadSchema.safeParse(payload);
       return parsed.success ? { nodeId: parsed.data.nodeId, nodeRunId: parsed.data.nodeRunId } : {};
+    }
+    case 'node.turn': {
+      // D375: one model turn of an agentic node's tool loop.
+      const parsed = NodeTurnPayloadSchema.safeParse(payload);
+      if (!parsed.success) return {};
+      const turn = parsed.data;
+      return {
+        nodeId: turn.nodeId,
+        nodeRunId: turn.nodeRunId,
+        label: `${nodeNames.get(turn.nodeId) ?? turn.nodeId} turn ${turn.turn} (${turn.toolCalls} ${
+          turn.toolCalls === 1 ? 'tool call' : 'tool calls'
+        })`,
+      };
     }
     case 'tool.call': {
       const parsed = ToolCallPayloadSchema.safeParse(payload);

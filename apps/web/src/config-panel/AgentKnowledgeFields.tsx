@@ -132,7 +132,7 @@ export function AgentKnowledgeBasesField({
             <span>A deleted knowledge base is still attached.</span>
             <button
               type="button"
-              className="ml-auto cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#c94c27] outline-none focus-visible:underline"
+              className="ml-auto cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-danger outline-none focus-visible:underline"
               onClick={() => toggle(id, false)}
             >
               Remove

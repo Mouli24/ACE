@@ -11,6 +11,7 @@ import type {
 import { TOOL_RESULT_SUMMARY_MAX } from '@ace/contracts';
 
 import type { ProducedPart } from '../ports/index.js';
+import type { ToolCommand } from './agentic/commands.js';
 import {
   isSecretFieldName,
   looksLikeSecret,
@@ -55,6 +56,8 @@ export interface ToolRunContext {
   sandboxDir: string;
   /** X1: the project folder the run works in — the only folder the project tools may touch. */
   projectDir?: string;
+  /** The node's `tools.allowedDomains`, re-checked by the network tools on each redirect [audit S-2]. */
+  allowedDomains?: readonly string[];
   /** Aborted when the run is stopped, so a tool cancels within the 2 s Stop budget (FR-CTL-003). */
   signal: AbortSignal;
 }
@@ -106,6 +109,12 @@ export interface ToolPointInput {
   enabledTools: readonly string[];
   sandboxDir: string;
   allowedDomains: readonly string[];
+  /**
+   * D376: an agentic node's `run_command` line and its gate against the run's allowlist, added by
+   * the scheduler. `allow` lets `destructive_action` pass without a card; `ask` puts the command on
+   * the card. Absent for every other call, whose approval is exactly what it was.
+   */
+  command?: ToolCommand;
 }
 
 /**
@@ -120,7 +129,18 @@ export interface ToolPointInput {
 export type ToolGuardStep =
   | { kind: 'allow'; verdicts?: Verdict[] }
   | { kind: 'block'; reason: string; verdicts?: Verdict[] }
-  | { kind: 'reject'; reason: string; verdicts?: Verdict[] };
+  | {
+      kind: 'reject';
+      reason: string;
+      verdicts?: Verdict[];
+      /** What the person wrote when they rejected it, if anything. */
+      note?: string;
+      /**
+       * D376: the rejected call was an agentic node's command (its card carried `command`). Such a
+       * reject is fed back to the model as a denied command rather than failing the node (D375).
+       */
+      command?: true;
+    };
 
 /** Which node run a tool call is being judged for, and against which policy (FR-GRD-002). */
 export interface ToolGuardrailTarget {
@@ -253,6 +273,8 @@ export function buildToolCall(input: {
   status: ToolCallStatus;
   verdicts: Verdict[];
   at: string;
+  /** D378: the project files an agentic node's call changed; absent on every other call. */
+  changedPaths?: string[];
 }): ToolCall {
   return {
     id: input.id,
@@ -264,6 +286,9 @@ export function buildToolCall(input: {
     status: input.status,
     verdicts: input.verdicts,
     at: input.at,
+    ...(input.changedPaths === undefined || input.changedPaths.length === 0
+      ? {}
+      : { changedPaths: input.changedPaths }),
   };
 }
 

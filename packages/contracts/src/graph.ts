@@ -122,6 +122,15 @@ export const DEFAULT_EXECUTION_SETTINGS = {
   retries: 2,
 } as const;
 
+/**
+ * D389: how hard a reasoning model should think before it answers. Absent or `null` (how a patch
+ * clears it, D72) leaves the provider's own default — the call is exactly what it was before. Each
+ * adapter maps the level to its own control and ignores it where it has none (Gemini CLI, mock).
+ */
+export const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export const ReasoningEffortSchema = z.enum(REASONING_EFFORTS);
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
+
 export const ExecutionSettingsSchema = z.object({
   temperature: z.number().min(0).max(2).default(DEFAULT_EXECUTION_SETTINGS.temperature),
   maxTokens: z.number().int().min(1).max(200_000).default(DEFAULT_EXECUTION_SETTINGS.maxTokens),
@@ -133,6 +142,8 @@ export const ExecutionSettingsSchema = z.object({
    * unknown cost (D359) is never refused. Absent or `null` (how a patch clears it, D72): no cap.
    */
   maxCostUsd: BudgetUsdSchema.nullable().optional(),
+  /** D389: the node's reasoning effort; absent or `null` = the provider's default. */
+  reasoningEffort: ReasoningEffortSchema.nullable().optional(),
 });
 export type ExecutionSettings = z.infer<typeof ExecutionSettingsSchema>;
 
@@ -156,6 +167,40 @@ export const defaultAgentTools = () => ({
   enabled: [] as string[],
   maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
   allowedDomains: [] as string[],
+});
+
+/**
+ * Per-node workspace access (agentic nodes Phase 2, D342). Four levels, no Full auto: `off` keeps a
+ * node exactly as it was; `read_only` lists, reads and searches the project; `edit_files` also
+ * writes; `edit_commands` also runs commands (each still asks unless allow-listed, D348).
+ */
+export const WORKSPACE_ACCESS = ['off', 'read_only', 'edit_files', 'edit_commands'] as const;
+export const WorkspaceAccessSchema = z.enum(WORKSPACE_ACCESS);
+export type WorkspaceAccess = z.infer<typeof WorkspaceAccessSchema>;
+
+export const DEFAULT_MAX_TURNS = 50;
+export const MAX_TURNS_LIMIT = 200;
+export const TOKEN_BUDGET_MIN = 1_000;
+export const TOKEN_BUDGET_MAX = 10_000_000;
+export const ALLOWED_COMMANDS_MAX = 100;
+
+/** One allowed command, a prefix such as `pnpm test` (D348); also what Always allow saves (D376). */
+export const AllowedCommandSchema = z.string().min(1).max(200);
+
+/** A node's workspace settings: access level, turn cap, optional token budget, allow-listed commands. */
+export const AgentWorkspaceSchema = z.strictObject({
+  access: WorkspaceAccessSchema,
+  maxTurns: z.number().int().min(1).max(MAX_TURNS_LIMIT),
+  tokenBudget: z.number().int().min(TOKEN_BUDGET_MIN).max(TOKEN_BUDGET_MAX).optional(),
+  allowedCommands: z.array(AllowedCommandSchema).max(ALLOWED_COMMANDS_MAX),
+});
+export type AgentWorkspace = z.infer<typeof AgentWorkspaceSchema>;
+
+/** The workspace a freshly placed Agent node gets: it can read and edit files, not run commands. */
+export const newAgentWorkspace = (): AgentWorkspace => ({
+  access: 'edit_files',
+  maxTurns: DEFAULT_MAX_TURNS,
+  allowedCommands: [],
 });
 
 export const AgentConfigSchema = z.object({
@@ -193,8 +238,17 @@ export const AgentConfigSchema = z.object({
    * the human's unaddressed messages and a digest of the envelopes routed in a run.
    */
   brain: z.boolean().optional(),
+  /** Workspace access (agentic nodes Phase 2). Absent means Off: the node behaves as it always did. */
+  workspace: AgentWorkspaceSchema.optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
+
+/** The node's workspace settings, with absent read as Off (agentic nodes Phase 2). */
+export function agentWorkspaceOf(config: AgentConfig): AgentWorkspace {
+  return (
+    config.workspace ?? { access: 'off', maxTurns: DEFAULT_MAX_TURNS, allowedCommands: [] }
+  );
+}
 
 /**
  * D353 (PG-2.1, X4): a JSON schema implies JSON output. A node's output types with its schema taken

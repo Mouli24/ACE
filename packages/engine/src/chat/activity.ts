@@ -10,7 +10,8 @@ import { maskSecrets } from '../security/secret-patterns.js';
  * is exactly that output, so it is not used.
  */
 
-export type ActivityStatus = 'ok' | 'error' | 'refused' | 'blocked';
+/** D378: a run's agentic node adds `denied` (the person said no) and `cancelled` (a Stop). */
+export type ActivityStatus = 'ok' | 'error' | 'refused' | 'blocked' | 'denied' | 'cancelled';
 
 /** `ReadFile`, `read-file` and `read_file` are one tool to the mapper. */
 function normalise(tool: string): string {
@@ -204,7 +205,11 @@ export function activityItemFor(input: {
         ? ' — refused: not available in chat'
         : input.status === 'blocked'
           ? ' — blocked by a guardrail'
-          : '';
+          : input.status === 'denied'
+            ? ' — denied'
+            : input.status === 'cancelled'
+              ? ' — cancelled'
+              : '';
   return {
     kind,
     tool: clip(input.tool, 80) || 'tool',

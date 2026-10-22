@@ -103,7 +103,7 @@ export function MessageBubble({
           className,
         )}
       >
-        <div className="flex items-center gap-2 border-b border-[rgba(201,76,39,0.25)] bg-[rgba(201,76,39,0.10)] px-[14px] py-[8px] text-[12px] font-bold text-[#c94c27]">
+        <div className="flex items-center gap-2 border-b border-[rgba(201,76,39,0.25)] bg-[rgba(201,76,39,0.10)] px-[14px] py-[8px] text-[12px] font-bold text-danger">
           <span aria-hidden>✕</span>
           Error
         </div>

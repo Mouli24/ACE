@@ -60,7 +60,7 @@ const SEGMENTED =
 
 function segment(active: boolean): string {
   return cn(
-    'h-[26px] cursor-pointer whitespace-nowrap rounded-full border px-4 text-[12px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+    'h-[26px] cursor-pointer whitespace-nowrap rounded-full border px-4 text-[12px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]',
     active
       ? 'border-[var(--seg)] bg-[var(--seg)] text-[var(--segInk)]'
       : 'border-transparent bg-transparent text-[var(--muted)]',
@@ -142,7 +142,7 @@ export function UsagePage() {
                   />
                 </div>
                 {range === undefined && (
-                  <p role="alert" className="text-[11px] leading-[1.45] text-[#c94c27]">
+                  <p role="alert" className="text-[11px] leading-[1.45] text-danger">
                     The first day must be on or before the last.
                   </p>
                 )}
@@ -177,7 +177,7 @@ export function UsagePage() {
         </section>
 
         {usage.isError ? (
-          <p role="alert" className="text-[12px] text-[#c94c27]">
+          <p role="alert" className="text-[12px] text-danger">
             Could not load usage: {usage.error.message}
           </p>
         ) : usage.data === undefined ? (

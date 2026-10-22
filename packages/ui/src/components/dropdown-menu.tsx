@@ -61,7 +61,7 @@ export const DropdownMenuItem = forwardRef<
 >(({ className, destructive, ...props }, ref) => (
   <DropdownMenuPrimitive.Item
     ref={ref}
-    className={cn(MENU_ITEM_CLASS, destructive && 'text-[#c94c27]', className)}
+    className={cn(MENU_ITEM_CLASS, destructive && 'text-danger', className)}
     {...props}
   />
 ));

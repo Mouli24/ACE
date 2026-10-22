@@ -24,7 +24,8 @@ describe('D299 D334 Forge’s bottom panel in the theme', () => {
   it('is the canvas’s bottom panel: 232px on the panel colour, the views as the segmented pill', () => {
     renderWithQuery(<BottomPanel projectId={P} />);
     const panel = screen.getByRole('region', { name: 'Panel' });
-    expect(panel).toHaveClass('h-[232px]', 'bg-[var(--panel)]', 'border-t');
+    expect(panel).toHaveStyle({ height: '232px' });
+    expect(panel).toHaveClass('bg-[var(--panel)]', 'border-t');
     expect(within(panel).getByRole('tablist', { name: 'Panel views' })).toHaveClass(
       'rounded-full',
       'bg-[var(--soft)]',
@@ -49,7 +50,7 @@ describe('D299 D334 Forge’s bottom panel in the theme', () => {
       }),
     );
     expect(screen.getByTestId('problems-count')).toHaveTextContent('2');
-    expect(screen.getByTestId('problems-count')).toHaveClass('text-[#c94c27]');
+    expect(screen.getByTestId('problems-count')).toHaveClass('text-danger');
   });
 
   it('counts one error once when Monaco and the checks both report it, and lists both rows (smoke S-2)', () => {
@@ -124,7 +125,7 @@ describe('D299 D334 Forge’s bottom panel in the theme', () => {
     // one row per problem, each opening it; D302 gives every row a Fix with agent beside it
     expect(within(card).getAllByRole('button', { name: /\[Ln/ })).toHaveLength(3);
     expect(within(card).getAllByRole('button', { name: 'Fix with agent' })).toHaveLength(3);
-    expect(within(card).getByRole('img', { name: 'Error' })).toHaveClass('text-[#c94c27]');
+    expect(within(card).getByRole('img', { name: 'Error' })).toHaveClass('text-danger');
     expect(within(card).getByRole('img', { name: 'Warning' })).toHaveClass('text-[#e8572e]');
     expect(within(card).getByRole('img', { name: 'Info' })).toHaveClass('text-[var(--muted)]');
     expect(within(card).getByRole('button', { name: /error on 1/ })).toHaveTextContent(

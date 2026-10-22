@@ -43,7 +43,7 @@ export const ContextMenuItem = forwardRef<
 >(({ className, destructive, onPointerUp, ...props }, ref) => (
   <ContextMenuPrimitive.Item
     ref={ref}
-    className={cn(MENU_ITEM_CLASS, destructive && 'text-[#c94c27]', className)}
+    className={cn(MENU_ITEM_CLASS, destructive && 'text-danger', className)}
     onPointerUp={(event) => {
       onPointerUp?.(event);
       // Linux opens a context menu on the right button's press, under the pointer, and Radix

@@ -1,4 +1,4 @@
-import type { CheckpointUpdatedPayload, Project } from '@ace/contracts';
+import type { CheckpointUpdatedPayload, Project, Run } from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { FakeRepository } from '../../__tests__/fake-repository.js';
@@ -514,5 +514,54 @@ describe('D300 fix round 1: a file diff answers only once both sides are read', 
     };
     const error = await conflictOf(service.fileDiff(project.id, checkpoint.id, 'a.ts'));
     expect(error.message).toBe('Checkpoints are unavailable: the before side is gone');
+  });
+});
+
+describe('D379 no revert of a step while its run is active', () => {
+  async function stepOf(status: Run['status']) {
+    const runId = newId();
+    await repository.runs.create(LOCAL_SCOPE, {
+      id: runId,
+      workflowId: newId(),
+      projectId: project.id,
+      status,
+      snapshot: { version: 1, nodes: [], edges: [] },
+      inputs: {},
+      preflightIssues: [],
+      totals: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+      startedAt: AT,
+    });
+    store.disk.set('a.ts', 'a0\n');
+    const { checkpoint } = await recorded(() => store.disk.set('a.ts', 'a1\n'), {
+      kind: 'run',
+      runId,
+    });
+    return checkpoint!;
+  }
+
+  it.each(['PREFLIGHT', 'RUNNING', 'PAUSED'] as const)(
+    'refuses a revert while the run is %s with 409 run_active, and changes nothing',
+    async (status) => {
+      const checkpoint = await stepOf(status);
+      const error = await conflictOf(service.act(project.id, checkpoint.id, { action: 'revert' }));
+      expect(error.status).toBe(409);
+      expect(error.code).toBe('run_active');
+      expect(error.message).toBe('Stop the run or let it finish before reverting its steps.');
+      expect(store.disk.get('a.ts')).toBe('a1\n');
+      expect((await service.get(project.id, checkpoint.id)).status).toBe('pending');
+    },
+  );
+
+  it('still lets the person keep while the run is active', async () => {
+    const checkpoint = await stepOf('RUNNING');
+    expect((await service.act(project.id, checkpoint.id, { action: 'keep' })).status).toBe('kept');
+  });
+
+  it.each(['COMPLETE', 'HALTED'] as const)('reverts once the run is %s', async (status) => {
+    const checkpoint = await stepOf(status);
+    expect((await service.act(project.id, checkpoint.id, { action: 'revert' })).status).toBe(
+      'reverted',
+    );
+    expect(store.disk.get('a.ts')).toBe('a0\n');
   });
 });

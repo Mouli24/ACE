@@ -1,18 +1,22 @@
-import type {
-  BudgetHalt,
-  BudgetScope,
-  GuardrailCheck,
-  GuardrailPolicy,
-  Id,
-  ModelPricing,
-  Node,
-  Usage,
-  ValidationIssue,
-  Verdict,
+import {
+  providerGroup,
+  type BudgetHalt,
+  type BudgetScope,
+  type GuardrailCheck,
+  type GuardrailPolicy,
+  type Id,
+  type Model,
+  type ModelPricing,
+  type Node,
+  type Provider,
+  type ProviderType,
+  type Usage,
+  type ValidationIssue,
+  type Verdict,
 } from '@ace/contracts';
 
 import type { Scope } from '../ports/index.js';
-import { estimateCostUsd } from '../runs/cost.js';
+import { estimateCostUsd, UNPRICED_TABLE } from '../runs/cost.js';
 import type { CheckOutcome } from '../guardrails/checks.js';
 import type { EvaluationTarget } from '../guardrails/evaluator.js';
 import type { ProjectLookup, SettingsLookup, UsageAggregateRepository } from '../guardrails/ports.js';
@@ -26,6 +30,9 @@ import type { ProjectLookup, SettingsLookup, UsageAggregateRepository } from '..
  *    `daily_budget_exceeded` issue and **zero provider calls** (§2.3, Arch §19.2).
  * 2. **Before a dispatch.** `totals.costUsd + maxTokens × price` would cross a cap. The run halts
  *    *before* spending the money, which is the only version of a budget that is actually a budget.
+ *    [audit E-4] The projection counts the prompt it will send (characters ÷ 4, Arch §24) as well
+ *    as its whole output allowance, and the projected spend of the calls already in flight, which
+ *    the totals do not hold yet — otherwise parallel branches each saw the cap as untouched.
  * 3. **After a node.** The real `totals.costUsd` crossed a cap — a model that answered longer than
  *    its projection, or a cap lowered mid-run.
  *
@@ -68,6 +75,11 @@ export interface BudgetService {
     projectId: Id;
     policy: GuardrailPolicy | null;
     nodeId?: Id;
+    /**
+     * [audit E-4, P-3] The nodes whose spend no cap can count (`unpricedNodes`): with a cap set,
+     * each gets an `unpriced_model_under_cap` warning — the run still starts.
+     */
+    unpriced?: readonly { nodeId: Id; nodeName: string }[];
   }): Promise<ValidationIssue[]>;
 
   /** Before the scheduler dispatches `node`: would this call cross a cap? (§2.3, FR-GRD-008) */
@@ -78,6 +90,10 @@ export interface BudgetService {
     node: Node;
     /** The price row of the model the node would use; absent for a model with no published price. */
     pricing?: ModelPricing;
+    /** [audit E-4] The prompt this call will send, estimated in tokens (characters ÷ 4). */
+    inputTokens?: number;
+    /** [audit E-4] What the calls already in flight are projected to spend, not yet in `totals`. */
+    inFlightUsd?: number;
   }): Promise<BudgetOutcome>;
 
   /** After a node run has been priced into `totals` (§2.3). */
@@ -103,13 +119,53 @@ export function utcDay(at: Date): string {
   return at.toISOString().slice(0, 10);
 }
 
-/** What a node's next call could cost at worst: its whole output allowance, at output prices. */
-export function projectedNodeCostUsd(node: Node, pricing: ModelPricing | undefined): number {
+/**
+ * What a node's next call could cost at worst: its whole output allowance at output prices, plus
+ * the prompt it sends at input prices [audit E-4] — `inputTokens`, estimated by the caller.
+ */
+export function projectedNodeCostUsd(
+  node: Node,
+  pricing: ModelPricing | undefined,
+  inputTokens = 0,
+): number {
   const maxTokens =
     node.kind === 'agent' || node.kind === 'model' ? node.config.execution.maxTokens : undefined;
   if (maxTokens === undefined) return 0;
 
-  return estimateCostUsd(0, maxTokens, pricing);
+  return estimateCostUsd(inputTokens, maxTokens, pricing);
+}
+
+/** D263: the providers that report what a call cost themselves, so a cap counts them unpriced. */
+const REPORTS_OWN_COST: ReadonlySet<ProviderType> = new Set<ProviderType>(['claude_code']);
+
+/**
+ * [audit E-4, P-3] The agent and model nodes whose spend a cost cap cannot count: the model has no
+ * price, its provider is neither local ($0 by rule, D359) nor the test provider, and the provider
+ * does not report the cost itself (D263). A node naming a provider or model that is gone is left
+ * to pre-flight's own issues for it.
+ */
+export function unpricedNodes(
+  nodes: readonly Node[],
+  providers: readonly Pick<Provider, 'id' | 'type' | 'baseUrl'>[],
+  models: readonly Pick<Model, 'providerId' | 'modelId' | 'pricing'>[],
+): { nodeId: Id; nodeName: string }[] {
+  const found: { nodeId: Id; nodeName: string }[] = [];
+  for (const node of nodes) {
+    if (node.kind !== 'agent' && node.kind !== 'model') continue;
+    const { providerId, modelId } = node.config;
+    if (providerId === undefined || modelId === undefined) continue;
+    const provider = providers.find((candidate) => candidate.id === providerId);
+    if (provider === undefined || REPORTS_OWN_COST.has(provider.type)) continue;
+    const group = providerGroup(provider);
+    if (group === 'local' || group === 'mock') continue;
+    const row = models.find(
+      (model) => model.providerId === providerId && model.modelId === modelId,
+    );
+    if (row === undefined) continue;
+    if (row.pricing !== undefined && row.pricing.priceTableVersion !== UNPRICED_TABLE) continue;
+    found.push({ nodeId: node.id, nodeName: node.name });
+  }
+  return found;
 }
 
 /** A check's cap, resolved through D79's order; `undefined` when nothing set one. */
@@ -211,9 +267,25 @@ export function createBudgetService(deps: BudgetServiceDeps): BudgetService {
   }
 
   return {
-    async preflightIssues({ projectId, policy, nodeId }) {
+    async preflightIssues({ projectId, policy, nodeId, unpriced = [] }) {
       const issues: ValidationIssue[] = [];
       const caps = await fallbacks(projectId);
+
+      // [audit E-4, P-3] A cap that will act (block or warn) and cannot see some node's spend.
+      const cap = costChecks(policy)
+        .filter((check) => check.action !== 'pass')
+        .map((check) => capFor(check, caps))
+        .find((usd) => usd !== undefined);
+      if (cap !== undefined) {
+        for (const node of unpriced) {
+          issues.push({
+            severity: 'warning',
+            code: 'unpriced_model_under_cap',
+            message: `"${node.nodeName}" uses a model with no price, so the ${money(cap)} cost cap cannot count what it spends.`,
+            nodeId: node.nodeId,
+          });
+        }
+      }
 
       for (const check of costChecks(policy)) {
         if (SCOPE_OF[check.type] !== 'daily') continue;
@@ -239,12 +311,12 @@ export function createBudgetService(deps: BudgetServiceDeps): BudgetService {
       return issues;
     },
 
-    beforeDispatch: ({ target, projectId, totals, node, pricing }) =>
+    beforeDispatch: ({ target, projectId, totals, node, pricing, inputTokens, inFlightUsd }) =>
       evaluate({
         target,
         projectId,
         runCostUsd: totals.costUsd,
-        extraUsd: projectedNodeCostUsd(node, pricing),
+        extraUsd: projectedNodeCostUsd(node, pricing, inputTokens) + (inFlightUsd ?? 0),
         projected: true,
       }),
 

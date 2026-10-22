@@ -1,33 +1,45 @@
 import {
+  REASONING_EFFORTS,
   REVIEW_CONTRACT_SCHEMA,
   ROUTING_POLICIES,
   TRANSFORM_OPS,
+  WORKSPACE_TOOL_NAMES,
+  agentWorkspaceOf,
   type AgentConfig,
   type Id,
   type InputConfig,
   type MergeConfig,
   type ModelConfig,
   type Node,
+  type ProviderType,
+  type ReasoningEffort,
   type RetrievalConfig,
   type TransformConfig,
 } from '@ace/contracts';
 import { Button } from '@ace/ui';
 import type { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { PolicyPicker } from '../guardrails/PolicyPicker';
+import { PartView } from '../inspector/EnvelopeView';
 import { useWorkflowProjectId } from '../nodes/retrieval/hooks';
 import { MergeModeField } from '../nodes/merge/MergeModeField';
 import { MergeSlots, type MergeSlot } from '../nodes/merge/MergeSlots';
+import { useProviders } from '../providers/hooks';
+import { useNodeRuns } from '../runs/hooks';
 import { useRunStore } from '../runs/run-store';
+import { useSelectedRun } from '../runs/selected-run';
+import { EFFORT, EFFORT_LABELS } from '../theme/constants';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { AgentKnowledgeBasesField, AgentMemoryField } from './AgentKnowledgeFields';
 import { AgentToolsSection } from './AgentToolsSection';
 import { InputAttachments } from './InputAttachments';
 import { JsonSchemaEditor } from './JsonSchemaEditor';
-import { FallbackModels, ProviderAndModel } from './ProviderAndModel';
+import { FallbackModels, ProviderAndModel, providerFor } from './ProviderAndModel';
 import { RetrievalPanel } from './RetrievalPanel';
 import { SkillsField, useSkills } from './SkillsField';
+import { WorkspaceAccessField } from './WorkspaceAccessField';
 import {
   DataTypeGroup,
   FIELD_GRID_CLASS,
@@ -78,12 +90,74 @@ function NameField({
   );
 }
 
+/** The select's value for "no setting": Radix refuses an empty value, and `null` is no string. */
+const EFFORT_DEFAULT = 'default';
+const EFFORT_OPTIONS: ReadonlyArray<{
+  value: ReasoningEffort | typeof EFFORT_DEFAULT;
+  label: string;
+}> = [
+  { value: EFFORT_DEFAULT, label: EFFORT[0] },
+  ...REASONING_EFFORTS.map((value) => ({ value, label: EFFORT_LABELS[value] })),
+];
+
+/**
+ * D389: what the node's provider does with the level — every adapter maps it its own way, and
+ * Gemini CLI has no such setting at all (the select is disabled there). No provider chosen yet:
+ * a word on what it will mean.
+ */
+function effortHint(type: ProviderType | undefined): { hint: string; disabled?: true } {
+  switch (type) {
+    case 'claude_code':
+      return { hint: 'Claude Code takes every level.' };
+    case 'codex_cli':
+      return { hint: 'Codex takes Low to Extra high; Max is sent as Extra high.' };
+    case 'gemini_cli':
+      return { hint: 'Gemini CLI has no reasoning-effort setting.', disabled: true };
+    case 'mock':
+      return { hint: 'The mock provider ignores it.' };
+    case undefined:
+      return { hint: 'Applied where the provider has a reasoning setting.' };
+    default:
+      return { hint: 'Applied by models that can reason; others ignore it.' };
+  }
+}
+
+/**
+ * D389: how hard the node's model thinks before it answers. Default writes `null` — no setting, the
+ * provider's own default, the call exactly as before (D72: `null` is how a patch clears it).
+ */
+function ReasoningEffortField({
+  value,
+  providerId,
+  onChange,
+}: {
+  value: ReasoningEffort | null | undefined;
+  providerId: string | undefined;
+  onChange: (value: ReasoningEffort | null) => void;
+}) {
+  const providers = useProviders();
+  const { hint, disabled } = effortHint(providerFor(providers.data ?? [], providerId)?.type);
+  return (
+    <SelectField
+      label="Reasoning effort"
+      value={value ?? EFFORT_DEFAULT}
+      options={EFFORT_OPTIONS}
+      hint={hint}
+      disabled={disabled === true}
+      onChange={(picked) => onChange(picked === EFFORT_DEFAULT ? null : picked)}
+    />
+  );
+}
+
 function ExecutionFields({
   execution,
+  providerId,
   onChange,
   children,
 }: {
   execution: AgentConfig['execution'];
+  /** D389: the node's provider, whose kind says what the reasoning effort does. */
+  providerId: string | undefined;
   onChange: (execution: AgentConfig['execution']) => void;
   /** More numbers that sit in the same grid (the Agent's context budget). */
   children?: ReactNode;
@@ -123,6 +197,11 @@ function ExecutionFields({
         value={execution.maxCostUsd}
         onCommit={(maxCostUsd) => onChange({ ...execution, maxCostUsd })}
       />
+      <ReasoningEffortField
+        value={execution.reasoningEffort}
+        providerId={providerId}
+        onChange={(reasoningEffort) => onChange({ ...execution, reasoningEffort })}
+      />
       {children}
     </div>
   );
@@ -161,7 +240,7 @@ function OutputContractStatus({ nodeId }: { nodeId: Id }) {
       {verdict !== undefined && (
         <p
           className={
-            verdict.tone === 'fail' ? 'text-[12px] text-[#c94c27]' : 'text-[12px] text-[#2f7d52]'
+            verdict.tone === 'fail' ? 'text-[12px] text-danger' : 'text-[12px] text-[#2f7d52]'
           }
           data-testid="output-contract-verdict"
           data-verdict={verdict.tone === 'fail' ? 'CONTRACT_VIOLATION' : 'passed'}
@@ -188,6 +267,7 @@ export function AgentPanel({
   projectId?: Id;
 }) {
   const skills = useSkills();
+  const workspaceOn = agentWorkspaceOf(config).access !== 'off';
   const skillTools = skills.flatMap((skill) => skill.tools);
   const reviewContract = JSON.stringify(REVIEW_CONTRACT_SCHEMA);
   const usesReviewContract = JSON.stringify(config.outputContract?.jsonSchema) === reviewContract;
@@ -217,7 +297,17 @@ export function AgentPanel({
         onCommit={(instructions) => patch({ instructions })}
         rows={8}
       />
-      <SkillsField skills={skills} tools={config.tools} onChange={(tools) => patch({ tools })} />
+      <WorkspaceAccessField
+        config={config}
+        projectId={projectId}
+        onChange={(workspace) => patch({ workspace })}
+      />
+      <SkillsField
+        skills={skills}
+        tools={config.tools}
+        hide={workspaceOn ? ['files', 'shell'] : []}
+        onChange={(tools) => patch({ tools })}
+      />
 
       <div className="flex min-w-0 flex-col gap-5">
         <SelectField
@@ -272,7 +362,11 @@ export function AgentPanel({
         </Button>
       </div>
 
-      <ExecutionFields execution={config.execution} onChange={(execution) => patch({ execution })}>
+      <ExecutionFields
+        execution={config.execution}
+        providerId={config.providerId}
+        onChange={(execution) => patch({ execution })}
+      >
         <NumberField
           label="Context budget (tokens)"
           value={config.contextPolicy.budgetTokens}
@@ -283,7 +377,8 @@ export function AgentPanel({
 
       <AgentToolsSection
         tools={config.tools}
-        exclude={skillTools}
+        exclude={workspaceOn ? [...skillTools, ...WORKSPACE_TOOL_NAMES] : skillTools}
+        hideMaxToolCalls={workspaceOn}
         onChange={(tools) => patch({ tools })}
       />
       <AgentMemoryField memory={config.memory} onChange={(memory) => patch({ memory })} />
@@ -347,6 +442,7 @@ export function ModelPanel({
       </div>
       <ExecutionFields
         execution={config.execution}
+        providerId={config.providerId}
         onChange={(execution) => patch({ execution })}
       />
     </>
@@ -484,10 +580,42 @@ export function TransformPanel({
 /** The theme's empty-state line: 13px, muted, centred. */
 const EMPTY_LINE_CLASS = 'py-2 text-center text-[13px] text-[var(--muted)]';
 
-export function OutputPanel() {
+/** The theme's text link: 11.5px / 600 in the accent. */
+const LINK_CLASS =
+  'self-start whitespace-nowrap text-[11.5px] font-semibold text-[#e8623a] no-underline outline-none hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]';
+
+/**
+ * [audit L-1] The Output node's result in the selected run (PG-3.2): what its node run recorded,
+ * read as the Inspector reads it (FR-EXE-010) and drawn with the same part renderers. The empty
+ * line shows only while that run has no output for this node.
+ */
+export function OutputPanel({ workflowId, nodeId }: { workflowId: string; nodeId: Id }) {
+  const { runId } = useSelectedRun(workflowId);
+  const nodeRuns = useNodeRuns(runId);
+  const output = (nodeRuns.data ?? []).filter((run) => run.nodeId === nodeId).at(-1)?.output;
   return (
     <Field label="Output">
-      <p className={EMPTY_LINE_CLASS}>Final result appears here after a run</p>
+      {nodeRuns.isError ? (
+        <p role="alert" className={EMPTY_LINE_CLASS}>
+          Could not read this run&apos;s output.{' '}
+          <Button variant="ghost" size="sm" onClick={() => void nodeRuns.refetch()}>
+            Retry
+          </Button>
+        </p>
+      ) : output === undefined || output.length === 0 ? (
+        <p className={EMPTY_LINE_CLASS}>Final result appears here after a run</p>
+      ) : (
+        <div data-testid="output-result" className="flex flex-col gap-2">
+          {output.map((part, index) => (
+            <PartView key={index} part={part} />
+          ))}
+        </div>
+      )}
+      {runId !== undefined && (
+        <Link to={`/runs/${runId}`} data-testid="output-see-run" className={LINK_CLASS}>
+          See the whole run →
+        </Link>
+      )}
     </Field>
   );
 }
@@ -569,7 +697,7 @@ export function KindPanel({
       return (
         <>
           {name}
-          <OutputPanel />
+          <OutputPanel workflowId={workflowId} nodeId={node.id} />
         </>
       );
     case 'retrieval':

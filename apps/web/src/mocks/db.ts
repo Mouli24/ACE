@@ -549,13 +549,57 @@ export class MockDb {
     const provider = this.getProvider(id);
     if (!provider) return undefined;
     const refreshedAt = now();
+    // D380: what the person set on a model survives a refresh, as it does in the engine.
+    const set = new Map(
+      this.state.models
+        .filter((m) => m.providerId === id && m.capabilitiesSetByPerson === true)
+        .map((m) => [m.modelId, m] as const),
+    );
     this.state.models = [
       ...this.state.models.filter((m) => m.providerId !== id),
-      ...catalogFor(provider, refreshedAt),
+      ...catalogFor(provider, refreshedAt).map((m) => {
+        const kept = set.get(m.modelId);
+        return kept === undefined
+          ? m
+          : {
+              ...m,
+              supportsTools: kept.supportsTools,
+              contextWindow: kept.contextWindow,
+              capabilitiesSetByPerson: true as const,
+            };
+      }),
     ];
     this.state.catalogRefreshedAt = refreshedAt;
     this.save();
     return { models: this.state.models.filter((m) => m.providerId === id), refreshedAt };
+  }
+
+  /** D380: the person's say on a model's tools and window; undefined for a model nobody lists. */
+  setModelCapabilities(
+    providerId: string,
+    modelId: string,
+    patch: { supportsTools?: boolean | null; contextWindow?: number | null },
+  ): Model | undefined {
+    const index = this.state.models.findIndex(
+      (m) => m.providerId === providerId && m.modelId === modelId,
+    );
+    const found = this.state.models[index];
+    const provider = this.getProvider(providerId);
+    if (found === undefined || provider === undefined) return undefined;
+    // `null` clears back to what discovery says, which the catalogue regenerates.
+    const discovered = catalogFor(provider, found.lastCheckedAt).find((m) => m.modelId === modelId);
+    const next: Model = { ...found };
+    if (patch.supportsTools === null) next.supportsTools = discovered?.supportsTools ?? false;
+    else if (patch.supportsTools !== undefined) next.supportsTools = patch.supportsTools;
+    if (patch.contextWindow === null) next.contextWindow = discovered?.contextWindow ?? found.contextWindow;
+    else if (patch.contextWindow !== undefined) next.contextWindow = patch.contextWindow;
+    const setTools = patch.supportsTools === undefined ? found.capabilitiesSetByPerson === true : patch.supportsTools !== null;
+    const setWindow = patch.contextWindow === undefined ? found.capabilitiesSetByPerson === true : patch.contextWindow !== null;
+    if (setTools || setWindow) next.capabilitiesSetByPerson = true;
+    else delete next.capabilitiesSetByPerson;
+    this.state.models[index] = next;
+    this.save();
+    return next;
   }
 
   /**

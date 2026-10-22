@@ -151,7 +151,7 @@ export function CreateKnowledgeBaseDialog({
           </div>
 
           {noProviders ? (
-            <p role="alert" className="text-[12px] text-[#c94c27]">
+            <p role="alert" className="text-[12px] text-danger">
               No providers yet. <Link to="/providers">Add a provider</Link> (the built-in Mock
               provider works offline) to pick an embedding model.
             </p>
@@ -226,7 +226,7 @@ export function CreateKnowledgeBaseDialog({
           />
 
           {create.error && (
-            <p role="alert" className="text-[12px] text-[#c94c27]">
+            <p role="alert" className="text-[12px] text-danger">
               {create.error.message}
             </p>
           )}

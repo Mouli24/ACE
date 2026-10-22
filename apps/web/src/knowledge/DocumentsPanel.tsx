@@ -73,19 +73,19 @@ export function DocumentsPanel({
         onUploaded={(artifact) => add.mutate(artifact.id)}
       />
       {add.error && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           Could not add the document: {add.error.message}
         </p>
       )}
       {reindex.error && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           Could not reindex: {reindex.error.message}
         </p>
       )}
 
       {documents.isPending && <p className="text-[13px] text-[var(--muted)]">Loading documents…</p>}
       {documents.isError && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           Could not load documents: {documents.error.message}
         </p>
       )}
@@ -163,7 +163,7 @@ export function DocumentsPanel({
                 {doc.status === 'failed' && (
                   <p
                     role="alert"
-                    className="text-[11px] leading-[1.45] text-[#c94c27]"
+                    className="text-[11px] leading-[1.45] text-danger"
                     data-testid={`kb-doc-error-${doc.id}`}
                   >
                     {doc.error ?? live?.error ?? 'Ingestion failed.'}

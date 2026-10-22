@@ -1,7 +1,13 @@
 import { z } from 'zod';
 
 import { GuardrailActionSchema, GuardrailPointSchema, type GuardrailPoint } from './enums.js';
-import { IdSchema, NodeNameSchema, TimestampSchema, type Id } from './graph.js';
+import {
+  AllowedCommandSchema,
+  IdSchema,
+  NodeNameSchema,
+  TimestampSchema,
+  type Id,
+} from './graph.js';
 
 /**
  * Guardrail policies, checks, verdicts and approvals (round 3 §2.2, round 5 §2.3,
@@ -191,6 +197,16 @@ export const DEFAULT_GUARDRAIL_POLICY_NAME = 'Default';
 type DefaultCheck = Pick<GuardrailCheck, 'point' | 'type' | 'action' | 'params'>;
 
 /**
+ * The default policy's `max_tool_calls` cap. 200 since agentic nodes (D375): a node working in the
+ * project folder reads, edits and runs far more than round 4's 25 calls; its own Max turns and
+ * token budget bound it. Policies seeded with the old 25 are raised by a migration.
+ */
+export const DEFAULT_POLICY_MAX_TOOL_CALLS = 200;
+
+/** What the default policy's `max_tool_calls` cap was before agentic nodes (round 4 §2.2). */
+export const PREVIOUS_POLICY_MAX_TOOL_CALLS = 25;
+
+/**
  * §2.2's default policy, in its order, then round 5 §2.3's three context checks: warn on content
  * issues, block secret leaks and tool abuse (D10), tag every untrusted piece of context, neutralise
  * the hidden instructions in it with a warning, and redact the personal data in it (D232).
@@ -211,7 +227,12 @@ const DEFAULT_CHECKS: readonly DefaultCheck[] = [
   { point: 'cost', type: 'max_cost_per_run', action: 'block', params: {} },
   { point: 'cost', type: 'daily_budget', action: 'block', params: {} },
   { point: 'loop', type: 'max_iterations', action: 'block', params: { max: 50 } },
-  { point: 'loop', type: 'max_tool_calls', action: 'block', params: { max: 25 } },
+  {
+    point: 'loop',
+    type: 'max_tool_calls',
+    action: 'block',
+    params: { max: DEFAULT_POLICY_MAX_TOOL_CALLS },
+  },
   { point: 'loop', type: 'repeated_output', action: 'block', params: { times: 3 } },
   { point: 'tool', type: 'destructive_action', action: 'ask_user', params: {} },
   { point: 'tool', type: 'tool_allowed', action: 'block', params: {} },
@@ -299,6 +320,22 @@ export type ChatVerdict = z.infer<typeof ChatVerdictSchema>;
 /* -------------------------------------------------------------------------- */
 
 export const APPROVAL_PREVIEW_MAX = 500;
+/** The longest command an approval card carries — `run_command`'s own limit (D376). */
+export const APPROVAL_COMMAND_MAX = 8_000;
+
+/**
+ * D376 (agentic nodes, FR-GRD-006): the command an agentic node's `run_command` asks to run, on the
+ * card. `text` is the command line with secret-shaped values masked. `allowPrefix` is offered only
+ * when one prefix covers the whole line and nothing about it is denied or uncoverable; approving
+ * with `always: true` allows it for the rest of the run and asks for it to be saved on the node.
+ * `denylisted` says a denylist rule matched: the card asks every time.
+ */
+export const ApprovalCommandSchema = z.strictObject({
+  text: z.string().max(APPROVAL_COMMAND_MAX),
+  allowPrefix: AllowedCommandSchema.optional(),
+  denylisted: z.boolean(),
+});
+export type ApprovalCommand = z.infer<typeof ApprovalCommandSchema>;
 
 /**
  * What an `ask_user` action puts in front of the user while the node is WAITING. Emitted as
@@ -323,6 +360,8 @@ export const ApprovalRequestSchema = z
     checkType: GuardrailCheckTypeSchema,
     reason: z.string(),
     preview: z.string().max(APPROVAL_PREVIEW_MAX),
+    /** D376: present only for an agentic node's `run_command`. */
+    command: ApprovalCommandSchema.optional(),
     requestedAt: TimestampSchema,
   })
   .refine(
@@ -344,12 +383,27 @@ export const ApprovalDecisionSchema = z.strictObject({
   requestId: IdSchema,
   decision: ApprovalDecisionKindSchema,
   note: z.string().optional(),
+  /**
+   * D376: approved with Always allow; `prefix` is the prefix the person chose to always allow. It
+   * is allowed for the rest of the run; saving it on the node is best-effort, and a failed save is
+   * logged, not recorded here.
+   */
+  always: z.literal(true).optional(),
+  prefix: AllowedCommandSchema.optional(),
   decidedAt: TimestampSchema,
 });
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
-/** `POST /node-runs/:id/approve` and `/reject` → `NodeRun`. The route is the decision. */
-export const ApprovalDecisionRequestSchema = z.strictObject({ note: z.string().optional() });
+/**
+ * `POST /node-runs/:id/approve` and `/reject` → `NodeRun`. The route is the decision. D376:
+ * `always: true` on an approve always-allows the request's `command.allowPrefix` — for the rest of
+ * the run, and on the node once the save succeeds; a request without one answers 400
+ * `validation_failed`.
+ */
+export const ApprovalDecisionRequestSchema = z.strictObject({
+  note: z.string().optional(),
+  always: z.literal(true).optional(),
+});
 export type ApprovalDecisionRequest = z.infer<typeof ApprovalDecisionRequestSchema>;
 
 /* -------------------------------------------------------------------------- */

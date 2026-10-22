@@ -7,6 +7,7 @@ import {
   type DataType,
   type Id,
   type Model,
+  type ModelCapabilitiesPatch,
   type ModelQuery,
   type NodeRun,
   type Page,
@@ -25,6 +26,7 @@ import type {
   ProviderRepository,
   RunPatch,
   RunRepository,
+  RunStatusGuard,
   Scope,
 } from '@ace/engine';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lt, or, sql } from 'drizzle-orm';
@@ -80,12 +82,16 @@ function toModel(row: ModelRow): Model {
     displayName: row.displayName,
     inputTypes: JSON.parse(row.inputTypes),
     outputTypes: JSON.parse(row.outputTypes),
-    contextWindow: row.contextWindow,
-    supportsTools: row.supportsTools,
+    // D380: what the person set wins over what the catalogue says.
+    contextWindow: row.contextWindowOverride ?? row.contextWindow,
+    supportsTools: row.supportsToolsOverride ?? row.supportsTools,
     supportsJson: row.supportsJson,
     available: row.available,
     source: row.source,
     lastCheckedAt: row.lastCheckedAt,
+    ...(row.supportsToolsOverride === null && row.contextWindowOverride === null
+      ? {}
+      : { capabilitiesSetByPerson: true }),
     ...(row.pricing === null ? {} : { pricing: JSON.parse(row.pricing) }),
     ...(row.description === null ? {} : { description: row.description }),
     ...(row.resolvedModelId === null ? {} : { resolvedModelId: row.resolvedModelId }),
@@ -156,6 +162,8 @@ function toNodeRun(row: NodeRunRow): NodeRun {
     ...(row.sources === null ? {} : { sources: JSON.parse(row.sources) }),
     ...(row.droppedSources === null ? {} : { droppedSources: JSON.parse(row.droppedSources) }),
     ...(row.memoryOps === null ? {} : { memoryOps: JSON.parse(row.memoryOps) }),
+    // D378: NULL on every node run but an agentic node step's, which stays absent.
+    ...(row.workspace === null ? {} : { workspace: JSON.parse(row.workspace) }),
     ...(row.startedAt === null ? {} : { startedAt: row.startedAt }),
     ...(row.endedAt === null ? {} : { endedAt: row.endedAt }),
     ...(row.durationMs === null ? {} : { durationMs: row.durationMs }),
@@ -269,11 +277,65 @@ export function createModelRepository(db: Db): ModelRepository {
 
   return {
     replaceForProvider: async (scope: Scope, providerId: Id, catalog: readonly Model[]) => {
-      db.delete(models)
-        .where(and(eq(models.workspaceId, scope.workspaceId), eq(models.providerId, providerId)))
-        .run();
+      const where = and(
+        eq(models.workspaceId, scope.workspaceId),
+        eq(models.providerId, providerId),
+      );
+      // D380: a refresh replaces the catalogue, never what the person set on a model it still lists.
+      const kept = new Map(
+        db
+          .select()
+          .from(models)
+          .where(where)
+          .all()
+          .map((row) => [row.modelId, row] as const),
+      );
+      db.delete(models).where(where).run();
 
-      for (const model of catalog) db.insert(models).values(rowFor(scope, model)).run();
+      for (const model of catalog) {
+        const before = kept.get(model.modelId);
+        // A row passed back with the flag carries the *effective* values (D380): keep the stored
+        // discovered ones as the base, so clearing the override can still restore them.
+        const base =
+          model.capabilitiesSetByPerson === true && before !== undefined
+            ? { supportsTools: before.supportsTools, contextWindow: before.contextWindow }
+            : {};
+        db.insert(models)
+          .values({
+            ...rowFor(scope, model),
+            ...base,
+            supportsToolsOverride: before?.supportsToolsOverride ?? null,
+            contextWindowOverride: before?.contextWindowOverride ?? null,
+          })
+          .run();
+      }
+    },
+
+    setCapabilities: async (
+      scope: Scope,
+      providerId: Id,
+      modelId: string,
+      patch: ModelCapabilitiesPatch,
+    ) => {
+      const where = and(
+        eq(models.workspaceId, scope.workspaceId),
+        eq(models.providerId, providerId),
+        eq(models.modelId, modelId),
+      );
+      if (db.select().from(models).where(where).get() === undefined) return null;
+      // `null` clears an override back to what discovery says; absent leaves it alone.
+      const set: Partial<typeof models.$inferInsert> = {
+        ...(patch.supportsTools === undefined
+          ? {}
+          : { supportsToolsOverride: patch.supportsTools }),
+        ...(patch.contextWindow === undefined
+          ? {}
+          : { contextWindowOverride: patch.contextWindow }),
+      };
+      // An empty patch marks nothing: the row is returned as it stands.
+      if (Object.keys(set).length > 0) db.update(models).set(set).where(where).run();
+      const row = db.select().from(models).where(where).get();
+      return row === undefined ? null : toModel(row);
     },
 
     list: async (scope: Scope, query: ModelQuery) =>
@@ -454,7 +516,7 @@ export function createRunRepository(db: Db): RunRepository {
         .all()
         .map(toRun),
 
-    update: async (scope: Scope, id: Id, patch: RunPatch) => {
+    update: async (scope: Scope, id: Id, patch: RunPatch, guard?: RunStatusGuard) => {
       const values = definedOnly({
         status: patch.status,
         haltReason: patch.haltReason,
@@ -477,10 +539,13 @@ export function createRunRepository(db: Db): RunRepository {
           patch.allowedActions === undefined
             ? undefined
             : toJsonColumn(patch.allowedActions, `run(${id}).allowedActions`),
+        // `null` clears it, with `haltReason`, when a reopened run is going again (D388).
         budgetHalt:
           patch.budgetHalt === undefined
             ? undefined
-            : toJsonColumn(patch.budgetHalt, `run(${id}).budgetHalt`),
+            : patch.budgetHalt === null
+              ? null
+              : toJsonColumn(patch.budgetHalt, `run(${id}).budgetHalt`),
         restartedFromRunId: patch.restartedFromRunId,
         // `null` clears the reason on a resume (D305); `undefined` leaves it alone.
         blockedReason: patch.blockedReason,
@@ -488,18 +553,21 @@ export function createRunRepository(db: Db): RunRepository {
           patch.domain === undefined ? undefined : toJsonColumn(patch.domain, `run(${id}).domain`),
       });
 
+      const thisRun = and(eq(runs.workspaceId, scope.workspaceId), eq(runs.id, id));
+      // [audit E-5] The compare-and-set is the statement's own WHERE, so the status is checked and
+      // written in one step; a row that has moved on is left alone and the update answers `null`.
+      const guarded =
+        guard === undefined ? thisRun : and(thisRun, inArray(runs.status, [...guard.ifStatus]));
+
+      let read = guarded;
       if (Object.keys(values).length > 0) {
-        db.update(runs)
-          .set(values)
-          .where(and(eq(runs.workspaceId, scope.workspaceId), eq(runs.id, id)))
-          .run();
+        const written = db.update(runs).set(values).where(guarded).run();
+        if (guard !== undefined && written.changes === 0) return null;
+        // Written: the row is read back whatever status the patch gave it.
+        read = thisRun;
       }
 
-      const row = db
-        .select()
-        .from(runs)
-        .where(and(eq(runs.workspaceId, scope.workspaceId), eq(runs.id, id)))
-        .get();
+      const row = db.select().from(runs).where(read).get();
       return row === undefined ? null : toRun(row);
     },
   };
@@ -563,6 +631,10 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
             nodeRun.memoryOps === undefined
               ? null
               : toJsonColumn(nodeRun.memoryOps, `${at}.memoryOps`),
+          workspace:
+            nodeRun.workspace === undefined
+              ? null
+              : toJsonColumn(nodeRun.workspace, `${at}.workspace`),
           startedAt: nodeRun.startedAt ?? null,
           endedAt: nodeRun.endedAt ?? null,
           durationMs: nodeRun.durationMs ?? null,
@@ -618,6 +690,10 @@ export function createNodeRunRepository(db: Db): NodeRunRepository {
           patch.memoryOps === undefined
             ? undefined
             : toJsonColumn(patch.memoryOps, `${at}.memoryOps`),
+        workspace:
+          patch.workspace === undefined
+            ? undefined
+            : toJsonColumn(patch.workspace, `${at}.workspace`),
         inputEnvelopes:
           patch.inputEnvelopes === undefined
             ? undefined

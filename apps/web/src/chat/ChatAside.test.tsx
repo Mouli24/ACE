@@ -8,11 +8,12 @@ import { useLayoutStore } from '../app/stores/layout';
 import { usePanelsStore } from '../app/stores/panels';
 import { useSelectionStore } from '../app/stores/selection';
 import { useWorkspaceStatus } from '../app/stores/workspace-status';
+import { newId } from '../lib/ulid';
 import { setChatScenario } from '../mocks/handlers-round4';
 import { createNode } from '../nodes/factory';
 import { ChatAside } from './ChatAside';
 import { useComposerChips } from './composer-chips';
-import { useChatSessions } from './session-store';
+import { oweTurn, useChatSessions } from './session-store';
 import {
   checkpoints,
   db,
@@ -206,6 +207,9 @@ describe('D285 each node keeps its own session', () => {
     expect(turn).toHaveTextContent('not signed in');
     await waitFor(() => expect(screen.queryByTestId('chat-streaming')).toBeNull());
     expect(screen.queryByTestId('chat-thinking')).toBeNull();
+    // [audit W-15] said once by the announcement; the turn itself is no alert to re-read on load
+    expect(turn).not.toHaveAttribute('role', 'alert');
+    expect(screen.getByTestId('chat-announce')).toHaveTextContent('could not answer.');
   });
 
   it('puts a run’s goal and result in the node’s chat, never on the Canvas', async () => {
@@ -330,10 +334,9 @@ const owe = (nodeId: string, text: string) =>
   );
 
 describe('D335 the theme’s message rows', () => {
-  it('names each turn, and a reply’s meta line carries "Send to Forge" into Forge', async () => {
+  it('names each turn, and a reply that wrote no files has no Forge button', async () => {
     const user = userEvent.setup();
     const { workflowId } = seedAgentNode();
-    const { workflow } = await api().getWorkflow(workflowId);
     renderChat(<ChatAside workflowId={workflowId} />);
     await waitFor(() => expect(conversation()).toBeInTheDocument());
 
@@ -347,15 +350,10 @@ describe('D335 the theme’s message rows', () => {
     expect(agentTurn).toHaveTextContent(/^✳Writer/);
     // the real usage the engine recorded, in the theme's short form
     expect(within(agentTurn).getByTestId('chat-usage')).toHaveTextContent(/^8 in · \d+ out$/);
-    // a user turn has no meta line
-    expect(within(userTurnRow).queryByTestId('chat-send-to-forge')).toBeNull();
-
-    await user.click(within(agentTurn).getByRole('button', { name: 'Send to Forge' }));
-    await waitFor(() =>
-      expect(screen.getByTestId('location')).toHaveTextContent(
-        `/projects/${workflow.projectId}/workflows/${workflowId}/forge`,
-      ),
-    );
+    // agents write into the project themselves: nothing is sent to Forge, and a turn that wrote
+    // nothing has nothing to open there
+    expect(within(agentTurn).queryByRole('button', { name: /Send to Forge/ })).toBeNull();
+    expect(within(agentTurn).queryByTestId('chat-open-in-forge')).toBeNull();
   });
 
   it('draws a Markdown list as the theme’s bullet rows', async () => {
@@ -400,6 +398,47 @@ describe('D335 "{name} is typing…" follows the real stream only', () => {
     act(() => useChatSessions.getState().settleThread(THREAD));
     expect(screen.queryByTestId('chat-streaming')).toBeNull();
     expect(screen.queryByText(/is typing…/)).toBeNull();
+  });
+});
+
+describe('D391 each sent message waits for its own reply', () => {
+  /** The engine took one more message for this node, behind any it still owes a reply. */
+  const oweNext = (nodeId: string, text: string) =>
+    useChatSessions
+      .getState()
+      .update(nodeId, (session) =>
+        oweTurn(
+          { ...session, threadId: THREAD },
+          { threadId: THREAD, userMessage: { ...userTurn(text), id: newId() }, since: Date.now() },
+        ),
+      );
+
+  it('says "N queued" while more than one turn is outstanding, and keeps Stop until the last reply', async () => {
+    const { workflowId, node } = seedAgentNode();
+    renderChat(<ChatAside workflowId={workflowId} />);
+    await waitFor(() => expect(conversation()).toHaveAttribute('data-node-id', node.id));
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+
+    // two messages back to back: the engine answers the first while the second waits its turn
+    act(() => {
+      oweNext(node.id, 'first');
+      oweNext(node.id, 'second');
+    });
+    expect(await screen.findByTestId('chat-queued')).toHaveTextContent('1 queued');
+    expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-thinking')).toHaveTextContent('Writer is typing…');
+
+    // the first reply settles the first message only: the second still waits, Stop stays
+    act(() => useChatSessions.getState().settleReply(THREAD, newId()));
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-thinking')).toHaveTextContent('Writer is typing…');
+
+    // the second reply: nothing is owed any more
+    act(() => useChatSessions.getState().settleReply(THREAD, newId()));
+    expect(screen.queryByTestId('chat-stop')).toBeNull();
+    expect(screen.queryByText(/is typing…/)).toBeNull();
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
   });
 });
 

@@ -218,6 +218,14 @@ const SPECS: readonly MockModelSpec[] = [
     inputTypes: ['text'],
     outputTypes: ['text'],
   },
+  // Agentic nodes Phase 2: scripted tool chains — see `agentToolLine`.
+  {
+    modelId: 'mock-agent',
+    displayName: 'Mock agent',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+    supportsTools: true,
+  },
 ];
 
 export const MOCK_MODELS: readonly ModelInfo[] = SPECS.map((spec) => ({
@@ -524,6 +532,28 @@ export function scriptTurn(script: string, turn: number): string | undefined {
     sections.find((section) => section.name === '*')?.body ??
     sections.at(-1)?.body
   );
+}
+
+/**
+ * Agentic nodes Phase 2 [D315]: `mock-agent` reads the same `[[turn N]]` sections as `mock-script`,
+ * plus lines `[[tool <name> <json-object>]]`, each of which becomes a `tool_call` chunk with the
+ * callId `mock-<turn>-<index>`. A section with no tool line is the final answer and ends the loop.
+ * A line that starts `[[tool ` but is not that form is a script error, never text.
+ */
+const AGENT_TOOL_LINE = /^\[\[tool (\S+) (.*)\]\]$/u;
+const AGENT_TOOL_PREFIX = '[[tool ';
+
+/**
+ * The turn a request is on (D377): the turns so far plus one when the request carries `turns`,
+ * else the distinct `mock-<turn>-` result groups so far, plus one.
+ */
+function agentTurnOf(req: GenerateRequest): number {
+  if (req.turns !== undefined) return req.turns.length + 1;
+  const groups = new Set<string>();
+  for (const entry of req.toolResults ?? []) {
+    groups.add(/^mock-(\d+)-/u.exec(entry.callId)?.[1] ?? entry.callId);
+  }
+  return groups.size + 1;
 }
 
 /** Rejects the moment the signal aborts, and never resolves otherwise. */
@@ -980,6 +1010,56 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
         }
         if (holdAt >= 0) await untilAborted(signal);
         yield* finishText(lines.join('\n'));
+        return;
+      }
+
+      case 'mock-agent': {
+        const turn = agentTurnOf(req);
+        const script = scriptOf(`${req.system ?? ''}
+${req.prompt}`);
+        const lines = (scriptTurn(script, turn) ?? 'ok').split('\n');
+
+        const text: string[] = [];
+        const tools: { name: string; args: unknown }[] = [];
+        for (const raw of lines) {
+          const line = raw.trim();
+          const match = AGENT_TOOL_LINE.exec(line);
+          if (match === null && line.startsWith(AGENT_TOOL_PREFIX)) {
+            throw new ProviderCallError({
+              kind: 'invalid_config',
+              code: 'bad_agent_script',
+              message: `mock-agent could not read the tool line ${line}: it needs the form [[tool <name> <json-object>]].`,
+              retryable: false,
+            });
+          }
+          if (match === null) {
+            text.push(raw);
+            continue;
+          }
+          let args: unknown;
+          try {
+            args = JSON.parse(match[2] ?? '');
+          } catch {
+            args = undefined;
+          }
+          if (args === null || typeof args !== 'object' || Array.isArray(args)) {
+            throw new ProviderCallError({
+              kind: 'invalid_config',
+              code: 'bad_agent_script',
+              message: `mock-agent could not read the tool line ${line}: it needs a JSON object.`,
+              retryable: false,
+            });
+          }
+          tools.push({ name: match[1] ?? '', args });
+        }
+
+        const said = text.join('\n').trim();
+        if (said !== '') yield { type: 'text', delta: said };
+        for (const [index, tool] of tools.entries()) {
+          yield { type: 'tool_call', callId: `mock-${turn}-${index}`, name: tool.name, args: tool.args };
+        }
+        yield { type: 'usage', tokensIn: 100 * turn, tokensOut: 20 };
+        yield { type: 'finish', reason: tools.length > 0 ? 'tool_calls' : 'stop' };
         return;
       }
 

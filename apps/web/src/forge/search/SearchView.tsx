@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { getSocket } from '../../app/socket';
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
 import { useSideViewStore } from '../explorer/side-view-store';
@@ -65,7 +65,7 @@ function useDebounced(value: string, ms: number): string {
 
 /** The theme's field, as the Explorer's filter draws it. */
 const FIELD =
-  'h-[30px] w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[12px] [font-family:inherit] text-[var(--ink)] outline-none focus:border-[#ef6b3f]';
+  'h-[30px] w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[12px] [font-family:inherit] text-[var(--ink)] outline-none focus:border-[var(--focus)]';
 
 /** A 20px toggle inside the query box; pressed, it takes the maximized panel button's look. */
 function Toggle({
@@ -87,7 +87,7 @@ function Toggle({
       aria-pressed={pressed}
       onClick={onToggle}
       className={cn(
-        'flex h-[20px] min-w-[20px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-none bg-transparent px-[3px] font-machine text-[10px] leading-none text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]',
+        'flex h-[20px] min-w-[20px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border-none bg-transparent px-[3px] font-machine text-[10px] leading-none text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]',
         pressed && 'bg-[var(--hover)] text-[#ef6b3f] hover:text-[#ef6b3f]',
       )}
     >
@@ -122,7 +122,7 @@ function FileResults({ projectId, file }: { projectId: string; file: FileSearchF
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="flex h-[24px] w-full min-w-0 cursor-pointer items-center gap-[6px] border-none bg-transparent px-[14px] text-left text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+        className="flex h-[24px] w-full min-w-0 cursor-pointer items-center gap-[6px] border-none bg-transparent px-[14px] text-left text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]"
       >
         <span aria-hidden className="w-[8px] shrink-0 text-[8px] text-[var(--muted)]">
           {open ? (
@@ -131,11 +131,7 @@ function FileResults({ projectId, file }: { projectId: string; file: FileSearchF
             <Icons.ChevronRight aria-hidden size={10} />
           )}
         </span>
-        <span
-          aria-hidden
-          className="h-[7px] w-[7px] shrink-0 rounded-full"
-          style={{ background: fileIconColor(file.path) }}
-        />
+        <FileIcon path={file.path} />
         <span className="shrink-0 font-semibold">{nameOf(file.path)}</span>
         <span className="min-w-0 flex-1 truncate font-machine text-[10px] text-[var(--muted)]">
           {parentOf(file.path)}
@@ -151,7 +147,7 @@ function FileResults({ projectId, file }: { projectId: string; file: FileSearchF
                 aria-label={`Line ${match.line}, column ${match.column}: ${match.preview}`}
                 title={`${file.path}:${match.line}:${match.column}`}
                 onClick={() => reveal(match.line, match.column)}
-                className="flex h-[22px] w-full min-w-0 cursor-pointer items-center gap-[8px] border-none bg-transparent pl-[36px] pr-[14px] text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+                className="flex h-[22px] w-full min-w-0 cursor-pointer items-center gap-[8px] border-none bg-transparent pl-[36px] pr-[14px] text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]"
               >
                 <Preview
                   preview={match.preview}
@@ -237,7 +233,7 @@ export function SearchView({ projectId }: { projectId: string }) {
           </div>
         </div>
         {problem !== undefined && (
-          <p role="alert" className="m-0 text-[11px] leading-[1.45] text-[#c94c27]">
+          <p role="alert" className="m-0 text-[11px] leading-[1.45] text-danger">
             {problem}
           </p>
         )}
@@ -262,7 +258,7 @@ export function SearchView({ projectId }: { projectId: string }) {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto pb-[10px]" aria-live="polite">
         {results.isError && wanted !== '' && (
-          <p role="alert" className="m-0 px-[14px] text-[11px] leading-[1.45] text-[#c94c27]">
+          <p role="alert" className="m-0 px-[14px] text-[11px] leading-[1.45] text-danger">
             {results.error instanceof Error ? results.error.message : 'The search failed.'}
           </p>
         )}

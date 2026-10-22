@@ -295,7 +295,7 @@ export function Composer({
                     <button
                       type="button"
                       aria-label={`Remove @${entry.handle}`}
-                      className="-mr-1 flex h-4 w-4 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                      className="-mr-1 flex h-4 w-4 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
                       onClick={() => setExclude([...kept, entry.nodeId])}
                     >
                       <Icons.X aria-hidden size={10} />
@@ -347,7 +347,7 @@ export function Composer({
             </p>
           )}
           {errors.length > 0 && (
-            <div role="alert" className="mt-1.5 text-[11.5px] text-[#c94c27]">
+            <div role="alert" className="mt-1.5 text-[11.5px] text-danger">
               {errors.map((each) => (
                 <p key={each}>{each}</p>
               ))}
@@ -361,7 +361,7 @@ export function Composer({
             >
               {unsent.ended ? (
                 <>
-                  <span className="text-[#c94c27]">
+                  <span className="text-danger">
                     This run has ended, so it takes no more messages.
                   </span>
                   <Button type="button" size="sm" disabled={busy} onClick={() => void startNew()}>
@@ -397,7 +397,7 @@ export function Composer({
                     <button
                       key={entry.nodeId}
                       type="button"
-                      className="flex h-[26px] cursor-pointer items-center gap-[5px] rounded-full border border-[var(--line)] bg-transparent pl-1 pr-[9px] font-machine text-[10.5px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                      className="flex h-[26px] cursor-pointer items-center gap-[5px] rounded-full border border-[var(--line)] bg-transparent pl-1 pr-[9px] font-machine text-[10.5px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
                       onClick={() => mention(entry.handle)}
                     >
                       <Avatar
@@ -421,7 +421,7 @@ export function Composer({
               type="submit"
               aria-label={live ? 'Send' : 'Start team run'}
               disabled={!canSend}
-              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[9px] border-none text-[#fff] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed"
+              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[9px] border-none text-[#fff] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-not-allowed"
               style={{
                 background: text.trim() !== '' && canSend ? '#ef6b3f' : 'var(--sendOff)',
               }}

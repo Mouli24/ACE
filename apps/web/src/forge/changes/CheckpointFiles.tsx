@@ -1,15 +1,17 @@
 import type { Checkpoint, CheckpointFile } from '@ace/contracts';
 import { cn } from '@ace/ui';
+import { useState } from 'react';
 
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { TONE_COLOR } from '../explorer/decorations';
 import { nameOf, parentOf } from '../files/paths';
 import { useCheckpointConflicts } from './changes-store';
 import { fileNote, fileStateLabel } from './present';
+import { RevertFileDialog, revertDeletes } from './RevertAllDialog';
 
 /** A row's quiet action, as the Processes list's: mono, small, a hover wash, the accent ring. */
 export const ROW_ACTION =
-  'shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent px-[5px] py-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-default disabled:opacity-50';
+  'shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent px-[5px] py-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-default disabled:opacity-50';
 
 /** `+3 −1` in the Explorer's added and deleted colours; `binary` for a binary file. */
 export function ChangeCounts({ file }: { file: CheckpointFile }) {
@@ -39,10 +41,11 @@ export interface CheckpointFilesProps {
 /**
  * A checkpoint's files, one row each (D300): the name (which reviews it), its folder, `+/−`, and,
  * while it waits, Keep and Revert — or what was decided. A revert the engine refused shows why,
- * on that file.
+ * on that file. A Revert that deletes the file asks first ([audit F-3]).
  */
 export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: CheckpointFilesProps) {
   const conflicts = useCheckpointConflicts(checkpoint.id);
+  const [confirmDelete, setConfirmDelete] = useState<string | undefined>();
   return (
     <ul className="m-0 flex list-none flex-col p-0">
       {checkpoint.files.map((file) => {
@@ -57,18 +60,14 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
             className="flex flex-col border-t border-[var(--line)] py-[3px] first:border-t-0"
           >
             <div className="flex min-h-[24px] items-center gap-[6px] text-[12px]">
-              <span
-                aria-hidden
-                className="h-[6px] w-[6px] shrink-0 rounded-full"
-                style={{ background: fileIconColor(file.path) }}
-              />
+              <FileIcon path={file.path} size={14} />
               <button
                 type="button"
                 aria-label={`Review ${file.path}`}
                 title={`Review ${file.path}`}
                 onClick={() => onReview(file.path)}
                 className={cn(
-                  'flex min-w-0 flex-1 cursor-pointer items-baseline gap-[5px] rounded-[4px] border-none bg-transparent p-0 text-left text-[12px] text-[var(--ink)] outline-none hover:underline focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+                  'flex min-w-0 flex-1 cursor-pointer items-baseline gap-[5px] rounded-[4px] border-none bg-transparent p-0 text-left text-[12px] text-[var(--ink)] outline-none hover:underline focus-visible:shadow-[0_0_0_2px_var(--focus)]',
                   file.change === 'deleted' && 'line-through',
                   !pending && 'text-[var(--muted)]',
                 )}
@@ -98,8 +97,12 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
                     aria-label={`Revert ${file.path}`}
                     title="Revert"
                     disabled={busy}
-                    onClick={() => onAction('revert', file.path)}
-                    className={cn(ROW_ACTION, 'text-[#c94c27] hover:text-[#c94c27]')}
+                    onClick={() =>
+                      revertDeletes(file)
+                        ? setConfirmDelete(file.path)
+                        : onAction('revert', file.path)
+                    }
+                    className={cn(ROW_ACTION, 'text-danger hover:text-danger')}
                   >
                     Revert
                   </button>
@@ -116,13 +119,21 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
               <p className="m-0 pl-[12px] text-[11px] leading-[1.35] text-[var(--muted)]">{note}</p>
             )}
             {conflict !== undefined && (
-              <p role="alert" className="m-0 pl-[12px] text-[11px] leading-[1.35] text-[#c94c27]">
+              <p role="alert" className="m-0 pl-[12px] text-[11px] leading-[1.35] text-danger">
                 {conflict}
               </p>
             )}
           </li>
         );
       })}
+      {confirmDelete !== undefined && onAction !== undefined && (
+        // a portal: the dialog's DOM is not the list's
+        <RevertFileDialog
+          path={confirmDelete}
+          onConfirm={() => onAction('revert', confirmDelete)}
+          onClose={() => setConfirmDelete(undefined)}
+        />
+      )}
     </ul>
   );
 }

@@ -3,6 +3,7 @@ import {
   EventsQuerySchema,
   ModelQuerySchema,
   StartRunRequestSchema,
+  ModelCapabilitiesPatchSchema,
   UpdateProviderRequestSchema,
   aceError,
   cliPatchError,
@@ -96,9 +97,6 @@ export function currentScenario(): ScenarioName {
 let pace: StreamPace = 'normal';
 export function setStreamPace(next: StreamPace): void {
   pace = next;
-}
-export function currentStreamPace(): StreamPace {
-  return pace;
 }
 
 /** Cancels every scenario still playing, so tests never leak into one another. */
@@ -492,6 +490,28 @@ export function createRound2Handlers(db: MockDb): HttpHandler[] {
       guard((ctx) => {
         const result = db.refreshModels(param(ctx, 'id'));
         return result ? HttpResponse.json(result) : notFound('Provider');
+      }),
+    ),
+
+    http.patch(
+      `${API}/providers/:id/models/:modelId`,
+      guard(async (ctx) => {
+        const parsed = ModelCapabilitiesPatchSchema.safeParse(await ctx.request.json());
+        if (!parsed.success) {
+          return error(
+            400,
+            'invalid_config',
+            'validation_failed',
+            'Request body is invalid.',
+            parsed.error.issues,
+          );
+        }
+        const model = db.setModelCapabilities(
+          param(ctx, 'id'),
+          decodeURIComponent(param(ctx, 'modelId')),
+          parsed.data,
+        );
+        return model ? HttpResponse.json(model) : notFound('Model');
       }),
     ),
 

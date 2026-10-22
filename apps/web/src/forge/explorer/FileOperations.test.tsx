@@ -375,19 +375,19 @@ describe('D334 the file operations in the theme', () => {
     await screen.findByTestId('tree-item-notes.md');
     await user.click(screen.getByRole('button', { name: 'New File' }));
     const input = screen.getByRole('textbox', { name: 'New file name' });
-    expect(input).toHaveClass('h-[24px]', 'bg-[var(--surface)]', 'focus:border-[#ef6b3f]');
+    expect(input).toHaveClass('h-[24px]', 'bg-[var(--surface)]', 'focus:border-[var(--focus)]');
     expect(input.parentElement).toHaveClass('h-[26px]');
     await user.type(input, 'notes.md{Enter}');
     expect(input).toHaveAttribute('aria-invalid', 'true');
-    expect(await screen.findByRole('alert')).toHaveClass('text-[#c94c27]', 'bg-[var(--surface)]');
+    expect(await screen.findByRole('alert')).toHaveClass('text-danger', 'bg-[var(--surface)]');
   });
 
   it('the menu is the theme’s menu, Delete in the error red', async () => {
     renderWithQuery(<ExplorerView projectId={projectId} />);
     fireEvent.contextMenu(await screen.findByTestId('tree-item-notes.md'));
     expect(await screen.findByRole('menu')).toHaveClass('rounded-[10px]', 'bg-[var(--surface)]');
-    expect(screen.getByRole('menuitem', { name: /Delete/ })).toHaveClass('text-[#c94c27]');
-    expect(screen.getByRole('menuitem', { name: /Rename/ })).not.toHaveClass('text-[#c94c27]');
+    expect(screen.getByRole('menuitem', { name: /Delete/ })).toHaveClass('text-danger');
+    expect(screen.getByRole('menuitem', { name: /Rename/ })).not.toHaveClass('text-danger');
   });
 
   it('the delete confirm names the path in mono, with Cancel as the Close pill', async () => {
@@ -400,7 +400,7 @@ describe('D334 the file operations in the theme', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Delete “readme.md”?' });
     expect(within(dialog).getByText('docs/readme.md')).toHaveClass('font-machine');
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveClass('bg-[var(--soft)]');
-    expect(within(dialog).getByRole('button', { name: 'Delete' })).toHaveClass('text-[#c94c27]');
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toHaveClass('text-danger');
   });
 });
 

@@ -15,6 +15,7 @@ import {
   type Timestamp,
   type TrustLevel,
   type Usage,
+  type WorkspaceSummary,
 } from '@ace/contracts';
 
 /**
@@ -178,6 +179,8 @@ export interface BuildEnvelopeInput {
   signal?: AbortSignal;
   /** The context guard over what a model summary would send (BR-13); see `SummariseInput`. */
   sanitise?: (text: string) => Promise<string | null>;
+  /** D378: what an agentic upstream node's step did in the project folder. */
+  workspace?: WorkspaceSummary;
 }
 
 /** One envelope for one edge group, built to fit (FR-EXE-005, FR-EXE-007). */
@@ -209,6 +212,8 @@ export async function buildEnvelope(
     },
     contract: input.contract,
     createdAt: input.createdAt,
+    // D378: only an agentic upstream's envelope carries one; every other is byte-identical.
+    ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
   };
 
   return usage === undefined ? { envelope } : { envelope, usage };

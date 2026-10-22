@@ -4,10 +4,19 @@ import { api } from '../../app/api';
 import { useLayoutStore } from '../../app/stores/layout';
 import { usePanelsStore } from '../../app/stores/panels';
 import { useComposerChips } from '../../chat/composer-chips';
-import { db, installChatMockServer, queryClient, seedAgentNode } from '../../chat/test-support';
+import {
+  db,
+  installChatMockServer,
+  queryClient,
+  seedAgentNode,
+  server,
+} from '../../chat/test-support';
+import { createForgeHandlers } from '../../mocks/handlers-forge';
 import { asMonaco, createFakeMonaco } from '../../test/fake-monaco';
 import { queryKeys } from '../../workflows/query-keys';
-import { ensureModel, resetModels, setMonaco } from '../editor/models';
+import { dirtyHandler } from '../editor/actions';
+import { useEditorStore } from '../editor/editor-store';
+import { ensureModel, getModel, resetModels, setMonaco } from '../editor/models';
 import { fixMessage, fixWithAgent, problemContext } from './fix-with-agent';
 
 /*
@@ -136,5 +145,64 @@ describe('D302 Fix with agent', () => {
     await loadGraph(workflowId);
     expect(await fixWithAgent({ projectId: P, problem, queryClient })).toBe('prefilled');
     expect(await api().listNodeChatThreads(node.id)).toEqual([]);
+  });
+});
+
+describe('[audit F-1] Fix with agent saves the file first: the agent fixes what the disk holds', () => {
+  /** A Forge project with `src/app.ts` on disk, open in the editor and typed into, unsaved. */
+  async function openDirty(): Promise<{ projectId: string; workflowId: string; nodeId: string }> {
+    server.use(...createForgeHandlers(db));
+    const { node, workflowId } = seedAgentNode();
+    await loadGraph(workflowId);
+    usePanelsStore.getState().chatWith(node.id);
+    const projectId = db.getWorkflow(workflowId)!.projectId;
+    db.seedFiles(projectId, { 'src/app.ts': LINES });
+    const disk = await api().readFile(projectId, 'src/app.ts');
+    useEditorStore.getState().open(projectId, 'src/app.ts');
+    useEditorStore
+      .getState()
+      .loaded(projectId, 'src/app.ts', disk.kind === 'text' ? disk.version : '', false);
+    ensureModel(
+      projectId,
+      'src/app.ts',
+      LINES,
+      'typescript',
+      dirtyHandler(projectId, 'src/app.ts'),
+    );
+    getModel(projectId, 'src/app.ts')!.setValue(LINES.replace('line 10', 'line ten'));
+    expect(useEditorStore.getState().projects[projectId]?.files['src/app.ts']?.dirty).toBe(true);
+    return { projectId, workflowId, nodeId: node.id };
+  }
+
+  it('saves the unsaved buffer, then sends: the disk and the message hold the same text', async () => {
+    const { projectId, workflowId, nodeId } = await openDirty();
+
+    expect(await fixWithAgent({ projectId, workflowId, problem, queryClient })).toBe('sent');
+    const disk = await api().readFile(projectId, 'src/app.ts');
+    expect(disk).toMatchObject({ kind: 'text', content: LINES.replace('line 10', 'line ten') });
+    expect(useEditorStore.getState().projects[projectId]?.files['src/app.ts']?.dirty).toBe(false);
+    await waitFor(async () => {
+      const [thread] = await api().listNodeChatThreads(nodeId);
+      const detail = await api().getChatThread(thread!.id);
+      expect(detail.messages[0]?.content[1]).toMatchObject({ type: 'code', path: 'src/app.ts' });
+      expect(JSON.stringify(detail.messages[0]?.content)).toContain('line ten');
+    });
+  });
+
+  it('a save that meets a conflict sends nothing: the request waits in the composer, saying the file is unsaved', async () => {
+    const { projectId, workflowId, nodeId } = await openDirty();
+    // the disk moved on since the buffer was loaded, so the save answers 409
+    db.seedFiles(projectId, { 'src/app.ts': `${LINES}\nline 21` });
+
+    expect(await fixWithAgent({ projectId, workflowId, problem, queryClient })).toBe('prefilled');
+    expect(useComposerChips.getState().draft).toBe(
+      "Fix this problem: Cannot find name 'foo'. (ts)\n" +
+        'Note: src/app.ts has unsaved changes in the editor that are not on disk.',
+    );
+    expect(useComposerChips.getState().chips).toMatchObject([{ path: 'src/app.ts' }]);
+    expect(useEditorStore.getState().projects[projectId]?.files['src/app.ts']?.conflict).toBe(
+      'changed',
+    );
+    expect(await api().listNodeChatThreads(nodeId)).toEqual([]);
   });
 });

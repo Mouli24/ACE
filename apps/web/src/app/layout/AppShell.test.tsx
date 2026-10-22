@@ -1,7 +1,9 @@
-import { screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { installMatchMedia, uninstallMatchMedia } from '../../responsive/test-support';
 import { db, installMockServer, renderApp } from '../../test/app';
+import { markSessionLost, useSessionStore } from '../stores/session';
 
 installMockServer();
 
@@ -128,5 +130,69 @@ describe('D338 the settings gear sits in the bottom-left corner', () => {
 
     renderApp('/projects');
     expect(await screen.findByTestId('settings-menu')).toHaveAttribute('data-placement', 'corner');
+  });
+});
+
+describe('audit U-2 a token the engine no longer takes', () => {
+  afterEach(() => useSessionStore.setState({ lost: false }));
+
+  it('gives the whole app over to the session-lost screen, with the engine-link copy', async () => {
+    renderApp('/projects');
+    await screen.findByTestId('settings-menu');
+    act(() => markSessionLost());
+    const screenCard = await screen.findByTestId('session-lost');
+    expect(
+      within(screenCard).getByRole('heading', { name: 'The engine restarted' }),
+    ).toBeInTheDocument();
+    expect(screenCard).toHaveTextContent('Open the new link it printed');
+    expect(screen.queryByTestId('settings-menu')).toBeNull();
+  });
+});
+
+describe('audit U-17 a workflow that cannot be loaded gets no workspace', () => {
+  it('keeps the mark and the theme toggle, with no Run controls, mode switch or Chat', async () => {
+    const { project } = seed();
+    renderApp(`/projects/${project.id}/workflows/01J9ZZZZZZZZZZZZZZZZZZZZZZ`);
+    expect(await screen.findByText(/Workflow not found\./)).toBeInTheDocument();
+    const header = screen.getByRole('banner');
+    expect(within(header).getByRole('link', { name: 'ACE' })).toBeInTheDocument();
+    expect(within(header).getByTestId('theme-toggle')).toBeInTheDocument();
+    expect(screen.queryByTestId('header-run-start')).toBeNull();
+    expect(screen.queryByTestId('mode-switch')).toBeNull();
+    expect(screen.queryByTestId('chat-toggle')).toBeNull();
+  });
+
+  it('at phone width the bar keeps no mode switch or run bar either', async () => {
+    installMatchMedia(true);
+    const { project } = seed();
+    renderApp(`/projects/${project.id}/workflows/01J9ZZZZZZZZZZZZZZZZZZZZZZ`);
+    expect(await screen.findByText(/Workflow not found\./)).toBeInTheDocument();
+    expect(screen.getByTestId('topbar-compact')).toBeInTheDocument();
+    expect(screen.queryByTestId('run-bar')).toBeNull();
+    expect(screen.queryByTestId('mode-switch')).toBeNull();
+  });
+});
+
+describe('audit U-13 a skip link and a title per section', () => {
+  it('the skip link moves focus past the header to the screen', async () => {
+    const user = userEvent.setup();
+    renderApp('/settings');
+    await screen.findByTestId('section-label');
+    const skip = screen.getByRole('link', { name: 'Skip to content' });
+    await user.tab();
+    expect(skip).toHaveFocus();
+    await user.click(skip);
+    expect(document.activeElement).toHaveAttribute('id', 'ace-main');
+    expect(document.activeElement).toContainElement(
+      screen.getByRole('heading', { level: 1, name: 'Settings' }),
+    );
+  });
+
+  it('names the tab after the section, and the mode inside a workflow', async () => {
+    const { unmount } = renderApp('/providers');
+    await waitFor(() => expect(document.title).toBe('Providers · ACE'));
+    unmount();
+    renderApp(`${seed().ideate}/forge`);
+    await waitFor(() => expect(document.title).toBe('Forge · ACE'));
   });
 });

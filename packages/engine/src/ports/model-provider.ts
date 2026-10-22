@@ -7,7 +7,9 @@ import type {
   Provider,
   ProviderState,
   ProviderType,
+  ReasoningEffort,
   ToolDefinition,
+  WorkspaceAccess,
 } from '@ace/contracts';
 
 /**
@@ -53,10 +55,6 @@ export interface ModelInfo {
 export const FINISH_REASONS = ['stop', 'length', 'refusal', 'tool_calls', 'error'] as const;
 export type FinishReason = (typeof FINISH_REASONS)[number];
 
-/**
- * What the executor hands an adapter. The prompt is already assembled (Arch §12.5) — an adapter
- * never builds one, and there is no message list here (BR-02).
- */
 /** One tool result fed back into a continuation call after the executor ran a `tool_call` (round 4 §2.6). */
 export interface ToolResult {
   callId: string;
@@ -67,6 +65,36 @@ export interface ToolResult {
   result: unknown;
 }
 
+/**
+ * One finished turn of a node's own tool loop, in a format no provider owns (agentic nodes, D377):
+ * what the model said, every call it made — parallel calls stay together — and what each returned.
+ *
+ * `opaque` is the provider's own record of the same turn, from its `opaque` chunk. An adapter of
+ * that `providerType` replays it verbatim, which is what carries reasoning and its signatures back
+ * (Anthropic thinking, Gemini `thoughtSignature`); any other adapter rebuilds the turn from the
+ * neutral fields. Nothing outside the adapter reads inside `payload`, and an adapter checks its
+ * shape before replaying it — a payload it does not recognise is rebuilt, never sent.
+ *
+ * The executor's contract, which every provider relies on: every call in `toolCalls` has exactly
+ * one entry in `results` with the same `callId` — a call the executor refused, blocked, timed out
+ * or dropped still gets a result saying so — and a turn with results always carries the calls they
+ * answer. A provider rejects a call with no result, and a result with no call, outright.
+ */
+export interface AgentTurn {
+  /** What the model said this turn alongside its calls; `''` when it only called tools. */
+  text: string;
+  /** Every call the model made this turn, in the order it made them. */
+  toolCalls: { callId: string; name: string; args: unknown }[];
+  /** What the executor got back for this turn's calls (FR-TOOL-010: labelled untrusted on replay). */
+  results: ToolResult[];
+  opaque?: { providerType: ProviderType; payload: unknown };
+}
+
+/**
+ * What the executor hands an adapter. The prompt is already assembled (Arch §12.5) — an adapter
+ * never builds one. The only message list is `turns`, which exists only inside one node's own tool
+ * loop (D377); what crosses between nodes is governed by BR-02 — envelopes only, never a history.
+ */
 export interface GenerateRequest {
   modelId: string;
   /** The `## System` section, when the provider takes one separately from the prompt. */
@@ -77,6 +105,11 @@ export interface GenerateRequest {
   maxTokens?: number;
   temperature?: number;
   /**
+   * D389: the node's reasoning effort. Absent means the provider's default — an adapter sends
+   * nothing then, so the call is what it was before. An adapter with no such control ignores it.
+   */
+  reasoningEffort?: ReasoningEffort;
+  /**
    * The tools the agent has enabled for this call (round 4 §2.6, FR-TOOL-003). When present, an
    * adapter that supports tools may answer with `tool_call` chunks instead of a final answer; when
    * absent or empty, the model is being asked to finish without tools.
@@ -85,9 +118,15 @@ export interface GenerateRequest {
   /**
    * Results of the tools the executor ran for the previous turn's `tool_call` chunks, fed back so
    * the model can continue (Arch §12.7). An adapter reads these to decide whether to call another
-   * tool or produce a final answer.
+   * tool or produce a final answer. Chat and non-agentic nodes send these; `turns` supersedes them.
    */
   toolResults?: ToolResult[];
+  /**
+   * D377: an agent node's turns so far, oldest first — when present it supersedes `toolResults`,
+   * and an empty list is a first turn. An adapter replays each as one assistant message holding the
+   * turn's words and all its calls, then one message with all its results ({@link AgentTurn}).
+   */
+  turns?: AgentTurn[];
   /**
    * Which run and which loop iteration this call belongs to. Optional and never needed to produce
    * an answer — adapters use them for tracing, and the mock keys its per-run behaviours on them.
@@ -104,6 +143,13 @@ export interface GenerateRequest {
    * CLI) reads it; without it such a provider runs read-only in a fresh temp folder.
    */
   workingDir?: string;
+  /**
+   * D383: the workspace access this node asks of a coding-agent CLI, and the command prefixes it may
+   * run (`agentWorkspaceOf(config).allowedCommands`). Only a CLI adapter reads it. Absent, or
+   * `access: 'off'`, the provider's own `cliPermission` preset applies exactly as before. With no
+   * `workingDir` the adapter still runs read-only in a throwaway folder, whatever is asked here.
+   */
+  cliAccess?: { access: WorkspaceAccess; allowedCommands: string[] };
 }
 
 /**
@@ -164,6 +210,15 @@ export type StreamChunk =
    * resolved to. Recorded as `ModelUsed.resolvedModelId`; it changes nothing about the answer.
    */
   | { type: 'model'; modelId: string }
+  /**
+   * D377: the provider's own record of the turn that just ended — for the AI SDK, its assistant
+   * messages with reasoning and signatures still on them. Yielded once, after the turn's content and
+   * before its `usage` and `finish`, by an adapter that can replay it, and only for a request that
+   * carries `turns` (a chat or non-agentic call never gets one); kept as that turn's
+   * `AgentTurn.opaque` for the node's next call. It never leaves the node (BR-02), and nothing but
+   * an adapter of `providerType` reads `payload`.
+   */
+  | { type: 'opaque'; providerType: ProviderType; payload: unknown }
   | { type: 'finish'; reason: FinishReason };
 
 export interface ProviderAdapter {

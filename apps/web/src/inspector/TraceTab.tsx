@@ -4,13 +4,16 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
 import { api } from '../app/api';
-import { useRun } from '../runs/hooks';
+import { useRun, useSocketStatus } from '../runs/hooks';
 import { frameRunId, useSocketFrames } from '../usage/live';
 
 /** A run that can still add events to its log; anything else has a closed trace (BR-04). */
 const LIVE: ReadonlySet<RunState> = new Set<RunState>(['PREFLIGHT', 'RUNNING', 'PAUSED']);
 
-/** While a run is live, the trace is also polled — a backstop for a socket not subscribed to it. */
+/**
+ * While a run is live and the socket is not open, the trace is polled — the backstop for frames
+ * that cannot arrive. [audit W-20] With the socket open its frames refetch it, so no poll as well.
+ */
 const POLL_MS = 2_000;
 /** Frames arrive in bursts (a node's state, output, usage); one refetch covers a burst. */
 const BURST_MS = 250;
@@ -34,11 +37,12 @@ export function TraceTab({ runId, nodeId }: { runId: Id; nodeId?: Id }) {
   const run = useRun(runId);
   const live = run.data !== undefined && LIVE.has(run.data.status);
   const [wholeRun, setWholeRun] = useState(false);
+  const socket = useSocketStatus();
 
   const trace = useQuery({
     queryKey: traceQueryKey(runId),
     queryFn: () => api().getRunTrace(runId),
-    refetchInterval: live ? POLL_MS : false,
+    refetchInterval: live && socket !== 'open' ? POLL_MS : false,
   });
 
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -110,7 +114,7 @@ export function TraceTab({ runId, nodeId }: { runId: Id; nodeId?: Id }) {
       {trace.isPending ? (
         <p className="m-0 py-3 text-center text-[13px] text-[var(--muted)]">Loading trace…</p>
       ) : trace.isError ? (
-        <p role="alert" className="m-0 text-[13px] text-[#c94c27]">
+        <p role="alert" className="m-0 text-[13px] text-danger">
           Could not load the trace: {trace.error.message}
         </p>
       ) : (

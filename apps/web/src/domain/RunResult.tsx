@@ -199,7 +199,7 @@ function FilesWritten({
             type="button"
             data-testid="run-result-open-all"
             onClick={() => onOpen(files.map((file) => file.path))}
-            className="shrink-0 text-[11px] font-semibold text-[#e8623a] hover:text-[#c94c27]"
+            className="shrink-0 text-[11px] font-semibold text-[#e8623a] hover:text-danger"
           >
             Open all in Forge
           </button>
@@ -223,7 +223,7 @@ function FilesWritten({
               type="button"
               data-testid="run-result-open-file"
               onClick={() => onOpen([file.path])}
-              className="shrink-0 text-[11px] font-semibold text-[#e8623a] hover:text-[#c94c27]"
+              className="shrink-0 text-[11px] font-semibold text-[#e8623a] hover:text-danger"
             >
               Open in Forge
             </button>
@@ -265,12 +265,21 @@ function filesWrittenIn(
   const names = new Map(run.snapshot.nodes.map((node) => [node.id, node.name]));
   const calls = (nodeRuns ?? [])
     .flatMap((record) => record.toolCalls.map((call) => ({ call, nodeId: record.nodeId })))
-    .filter(({ call }) => call.status === 'ok' && WRITE_TOOLS.has(call.toolName))
+    // D378: a command's changed files count too (`run_command`'s `changedPaths`)
+    .filter(
+      ({ call }) =>
+        call.status === 'ok' &&
+        (WRITE_TOOLS.has(call.toolName) || (call.changedPaths ?? []).length > 0),
+    )
     .sort((a, b) => a.call.at.localeCompare(b.call.at));
   const files = new Map<string, WrittenFile>();
   for (const { call, nodeId } of calls) {
     const name = names.get(nodeId) ?? 'A node';
-    for (const raw of writtenPaths(call.args)) {
+    const raws = [
+      ...(WRITE_TOOLS.has(call.toolName) ? writtenPaths(call.args) : []),
+      ...(call.changedPaths ?? []),
+    ];
+    for (const raw of raws) {
       const path = projectPath(raw, folderPath);
       if (path === undefined) continue;
       const file = files.get(path) ?? { path, by: [] };

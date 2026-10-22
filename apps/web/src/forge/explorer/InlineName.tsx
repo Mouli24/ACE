@@ -1,7 +1,7 @@
-import { cn } from '@ace/ui';
+
 import { useEffect, useRef, useState } from 'react';
 
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 
 /** Where a row's name starts: its indent, then the caret column (9 + 7) and the mark (8 + 7). */
 const nameOffset = (depth: number): number => 8 + depth * 14 + 31;
@@ -73,11 +73,7 @@ export function InlineName({
         style={{ paddingLeft: 8 + depth * 14 }}
       >
         <span aria-hidden className="w-[9px] shrink-0" />
-        <span
-          aria-hidden
-          className={cn('h-[8px] w-[8px] shrink-0', folder ? 'rounded-[2px]' : 'rounded-full')}
-          style={{ background: folder ? 'var(--iconLine)' : fileIconColor(value) }}
-        />
+        <FileIcon path={value} folder={folder} />
         <input
           ref={input}
           aria-label={label}
@@ -103,13 +99,13 @@ export function InlineName({
             if (value.trim() === '' || value === initial) onCancel(lost);
             else void commit(lost);
           }}
-          className="h-[24px] min-w-0 flex-1 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-[6px] text-[12.5px] font-medium [font-family:inherit] text-[var(--ink)] outline-none focus:border-[#ef6b3f] aria-[invalid=true]:border-[#c94c27]"
+          className="h-[24px] min-w-0 flex-1 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-[6px] text-[12.5px] font-medium [font-family:inherit] text-[var(--ink)] outline-none focus:border-[var(--focus)] aria-[invalid=true]:border-[#c94c27]"
         />
       </div>
       {problem !== undefined && (
         <p
           role="alert"
-          className="absolute left-0 right-[8px] z-10 mt-[2px] rounded-[6px] border border-[#c94c27] bg-[var(--surface)] px-[8px] py-[5px] text-[11.5px] leading-[1.4] text-[#c94c27] shadow-[0_18px_40px_-16px_rgba(30,20,10,0.45)]"
+          className="absolute left-0 right-[8px] z-10 mt-[2px] rounded-[6px] border border-[#c94c27] bg-[var(--surface)] px-[8px] py-[5px] text-[11.5px] leading-[1.4] text-danger shadow-[0_18px_40px_-16px_rgba(30,20,10,0.45)]"
           style={{ marginLeft: nameOffset(depth) }}
         >
           {problem}

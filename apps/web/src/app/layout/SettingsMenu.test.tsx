@@ -18,7 +18,7 @@ function renderGear(placement: 'footer' | 'corner') {
 }
 
 describe('D338 SettingsMenu', () => {
-  it('is a gear named "Settings menu" that opens upward on Providers, Onboarding and Settings', async () => {
+  it('is a gear named "Settings menu" that opens upward on every app page (audit U-7)', async () => {
     const user = userEvent.setup();
     renderGear('corner');
     const gear = screen.getByTestId('settings-menu');
@@ -31,17 +31,22 @@ describe('D338 SettingsMenu', () => {
     const items = await screen.findAllByRole('menuitem');
     expect(items.map((item) => [item.textContent, item.getAttribute('href')])).toEqual([
       ['Providers', '/providers'],
-      ['Onboarding', '/onboarding'],
       ['Settings', '/settings'],
+      ['Usage', '/usage'],
+      ['Guardrail policies', '/guardrails'],
+      ['Tools', '/library/tools'],
+      ['Bench', '/bench'],
+      ['Setup wizard', '/onboarding'],
+      ['Help', '/help/getting-started'],
     ]);
     expect(screen.getByRole('menu')).toHaveAttribute('data-side', 'top');
   });
 
-  it('Onboarding opens the first-run wizard', async () => {
+  it('Setup wizard opens the first-run wizard', async () => {
     const user = userEvent.setup();
     const { router } = renderGear('footer');
     await user.click(screen.getByTestId('settings-menu'));
-    await user.click(await screen.findByRole('menuitem', { name: 'Onboarding' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Setup wizard' }));
     expect(router.state.location.pathname).toBe('/onboarding');
     expect(await screen.findByTestId('landed')).toBeInTheDocument();
   });

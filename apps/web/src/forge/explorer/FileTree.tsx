@@ -21,7 +21,7 @@ import {
 
 import { useProject } from '../../projects/hooks';
 import { askAgentAboutFile } from '../ask-agent';
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import type { AgentLook } from '../../theme/agents';
 import { useChangesStore } from '../changes/changes-store';
 import { usePendingChanges } from '../changes/hooks';
@@ -43,6 +43,8 @@ import { nameProblem } from './names';
 import { useTreeRows } from './useTreeRows';
 
 const SAVING = 'Wait for the save to finish.';
+/** [audit F-8] The filter renders at most this many matching files; the rest are counted. */
+export const FILTER_ROWS_MAX = 500;
 const DRAG_TYPE = 'application/x-ace-path';
 /** Where a drop would land: the canvas's selection box, its orange wash and 1.5px line (D332). */
 const DROP_TARGET = 'bg-[rgba(239,107,63,0.06)] shadow-[inset_0_0_0_1.5px_#ef6b3f]';
@@ -53,8 +55,11 @@ export interface FileTreeProps {
   projectId: string;
   /** The tree's accessible name. */
   label: string;
-  /** A single click previews; a double click or Enter pins (§6.2's preview tab). */
-  onOpen(path: string, options: { preview: boolean }): void;
+  /**
+   * A single click previews; a double click or Enter pins (§6.2's preview tab). Space previews and
+   * keeps the focus in the tree (`focus: false`, [audit F-11]).
+   */
+  onOpen(path: string, options: { preview: boolean; focus?: boolean }): void;
   /** Non-empty: a flat list of the project's files whose path contains it (theme filter). */
   filter?: string;
   /** Path → the agent writing that file now, from the run (D334). */
@@ -136,6 +141,13 @@ export function FileTree({
   };
 
   const query = filter.trim().toLowerCase();
+  const matches = useMemo(
+    () =>
+      query === ''
+        ? []
+        : (list.data?.files ?? []).filter((path) => path.toLowerCase().includes(query)),
+    [query, list.data],
+  );
   const rows = useMemo<Row[]>(
     () =>
       query === ''
@@ -146,11 +158,13 @@ export function FileTree({
             ignored: entry.ignored,
             depth,
           }))
-        : (list.data?.files ?? [])
-            .filter((path) => path.toLowerCase().includes(query))
+        : matches
+            .slice(0, FILTER_ROWS_MAX)
             .map((path) => ({ path, name: path, folder: false, ignored: false, depth: 0 })),
-    [query, tree.rows, list.data],
+    [query, tree.rows, matches],
   );
+  /** Matching files past the rows rendered ([audit F-8]). */
+  const more = matches.length - Math.min(matches.length, FILTER_ROWS_MAX);
   const loading = query === '' ? tree.loading : list.isPending;
   const error = query === '' ? tree.error : list.error;
 
@@ -202,9 +216,9 @@ export function FileTree({
     store.getState().select(projectId, path);
     rowElements.current.get(path)?.focus();
   };
-  const activate = (row: Row, preview: boolean): void => {
+  const activate = (row: Row, preview: boolean, focus = true): void => {
     if (row.folder) store.getState().toggle(projectId, row.path);
-    else onOpen(row.path, { preview });
+    else onOpen(row.path, focus ? { preview } : { preview, focus: false });
   };
 
   const commitCreate = async (
@@ -287,7 +301,7 @@ export function FileTree({
         if (row) activate(row, false);
         break;
       case ' ':
-        if (row) activate(row, true);
+        if (row) activate(row, true, false);
         break;
       case 'F2':
         if (!editable || row === undefined) return;
@@ -373,7 +387,7 @@ export function FileTree({
   if (error) {
     return (
       <div className={area}>
-        <p role="alert" className={cn(note, 'text-[#c94c27]')}>
+        <p role="alert" className={cn(note, 'text-danger')}>
           Couldn’t read the project folder: {messageOf(error)}
         </p>
       </div>
@@ -448,7 +462,7 @@ export function FileTree({
           {...(editable ? dragTargetProps(folder ? path : parentOf(path), true) : {})}
           onContextMenu={() => store.getState().select(projectId, path)}
           className={cn(
-            'flex h-[26px] w-full shrink-0 cursor-pointer select-none items-center gap-[7px] rounded-[6px] pr-[8px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]',
+            'flex h-[26px] w-full shrink-0 cursor-pointer select-none items-center gap-[7px] rounded-[6px] pr-[8px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]',
             active ? 'bg-[var(--hover)]' : 'bg-transparent',
             folder || active ? 'font-semibold' : 'font-medium',
             dropTarget === path && DROP_TARGET,
@@ -475,11 +489,7 @@ export function FileTree({
             data-glyph={folder ? (isOpen ? '▾' : '▸') : ''}
             className="w-[9px] shrink-0 text-[9px] text-[var(--muted)] after:content-[attr(data-glyph)]"
           />
-          <span
-            aria-hidden
-            className={cn('h-[8px] w-[8px] shrink-0', folder ? 'rounded-[2px]' : 'rounded-full')}
-            style={{ background: folder ? 'var(--iconLine)' : fileIconColor(path) }}
-          />
+          <FileIcon path={path} folder={folder} open={isOpen} />
           <span
             className="min-w-0 flex-1 truncate"
             style={tone ? { color: TONE_COLOR[tone] } : undefined}
@@ -532,6 +542,30 @@ export function FileTree({
     );
     if (editing?.mode === 'create' && query === '' && folder && editing.parent === path && isOpen)
       rendered.push(inputRow(depth + 1));
+    // [audit F-14] an open folder still listing, or unreadable, says so under its row
+    const status = folder && isOpen && query === '' ? tree.folders.get(path) : undefined;
+    if (status !== undefined) {
+      rendered.push(
+        'error' in status ? (
+          <p
+            key={`${path}\u0000status`}
+            role="alert"
+            className={cn(note, 'text-danger')}
+            style={{ paddingLeft: 8 + (depth + 1) * 14 }}
+          >
+            Couldn’t read {name}: {messageOf(status.error)}
+          </p>
+        ) : (
+          <p
+            key={`${path}\u0000status`}
+            className={note}
+            style={{ paddingLeft: 8 + (depth + 1) * 14 }}
+          >
+            Reading the folder…
+          </p>
+        ),
+      );
+    }
   }
 
   const folderPath = project.data?.folderPath ?? '';
@@ -559,6 +593,11 @@ export function FileTree({
         <p className={note}>{query === '' ? 'This folder is empty.' : 'No files match.'}</p>
       )}
       {rendered}
+      {more > 0 && (
+        <p data-testid="filter-more" className={note}>
+          {more.toLocaleString()} more — keep typing to narrow the list.
+        </p>
+      )}
     </div>
   );
 
@@ -612,7 +651,7 @@ export function FileTree({
                   <>
                     <ContextMenuSeparator />
                     {/* D302: the file, by its path, as a chip in the chat composer. */}
-                    <ContextMenuItem onSelect={() => askAgentAboutFile(target.path)}>
+                    <ContextMenuItem onSelect={() => askAgentAboutFile(target.path, projectId)}>
                       Ask Agent About This File
                     </ContextMenuItem>
                   </>

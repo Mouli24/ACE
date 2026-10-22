@@ -79,7 +79,7 @@ export function KbSettingsDialog({ kb, onClose }: { kb: KnowledgeBase; onClose: 
             onChunkOverlap={setChunkOverlap}
           />
           {update.error && (
-            <p role="alert" className="text-[12px] text-[#c94c27]">
+            <p role="alert" className="text-[12px] text-danger">
               {update.error.message}
             </p>
           )}

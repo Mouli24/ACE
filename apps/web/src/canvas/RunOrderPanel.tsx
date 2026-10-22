@@ -12,7 +12,7 @@ import { moveToStep, stepLook, type RunOrderEdit, type StepLook } from './run-or
 const ROW_DRAG_TYPE = 'application/x-ace-run-order-node';
 
 const ICON_BUTTON =
-  'flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-[6px] border-none bg-transparent p-0 text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-default disabled:opacity-40';
+  'flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-[6px] border-none bg-transparent p-0 text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-default disabled:opacity-40';
 
 const STEP_LOOK: Record<StepLook, string> = {
   idle: 'border-[var(--line)]',
@@ -148,7 +148,7 @@ export function RunOrderPanel({
                     className="animate-spin text-[#ef6b3f]"
                   />
                 ) : look === 'failed' ? (
-                  <Icons.CircleAlert aria-label="Stopped" size={13} className="text-[#c94c27]" />
+                  <Icons.CircleAlert aria-label="Stopped" size={13} className="text-danger" />
                 ) : null}
                 <span>Step {step}</span>
                 {nodeIds.length > 1 && (

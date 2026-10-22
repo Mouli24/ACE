@@ -19,6 +19,7 @@ import { useWorkspaceStatus } from '../app/stores/workspace-status';
 import { DomainRunView } from '../domain/DomainPage';
 import { RunConversationTab } from '../domain/RunConversationTab';
 import { useWorkflowMode, workflowPath } from '../forge/mode';
+import { useOpenInForge } from '../forge/open-in-forge';
 import { useSocketStatus } from '../runs/hooks';
 import { useSelectedRun } from '../runs/selected-run';
 import { useWorkflowTask } from '../runs/useWorkflowTask';
@@ -29,14 +30,14 @@ import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
 import { useRestoreLastChat } from './last-chat';
-import { useChatSessions } from './session-store';
+import { owedTurns, useChatSessions } from './session-store';
 import { sendToNode, stopNode, useThreadConversation } from './useChat';
 import { isChatNode, useDropStaleChatTarget } from './workflow-target';
 
 /** Tabs drawn before the rest go under "More" (the theme's tabs row). */
 const VISIBLE_TABS = 3;
 
-const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /** A theme chat tab: 30px pill, ink border and surface when active (D335). */
 const tabClass = (active: boolean) =>
@@ -182,10 +183,7 @@ export function ChatAside({
     setView('run');
   };
 
-  const sendToForge =
-    projectId === undefined
-      ? undefined
-      : () => navigate(workflowPath(projectId, workflowId, 'forge'));
+  const openInForge = useOpenInForge(projectId, workflowId);
 
   const shown = agents.slice(0, VISIBLE_TABS);
   const overflow = agents.slice(VISIBLE_TABS);
@@ -242,9 +240,14 @@ export function ChatAside({
   const sending = useChatSessions((state) =>
     target === undefined ? false : state.sessions[target.id]?.sending === true,
   );
-  // PG-1.6: a reply on its way in the shown session can be stopped from the composer.
+  // PG-1.6: a reply on its way in the shown session can be stopped from the composer — D391:
+  // until the last turn the session sent is answered, not just the first.
   const replying = useChatSessions((state) =>
     target === undefined ? false : state.sessions[target.id]?.pending !== undefined,
+  );
+  // D391: the turns sent after the one being answered, still in the engine's queue.
+  const queued = useChatSessions((state) =>
+    target === undefined ? 0 : Math.max(0, owedTurns(state.sessions[target.id] ?? {}).length - 1),
   );
 
   // One composer for the whole column, never remounted: switching nodes keeps the text typed so
@@ -256,6 +259,7 @@ export function ChatAside({
       roster={chatRoster}
       mainNodeId={target?.id}
       replying={replying}
+      queued={queued}
       onStop={() => {
         if (target !== undefined) void stopNode(queryClient, target.id);
       }}
@@ -391,7 +395,7 @@ export function ChatAside({
           <TargetChat
             key={target.id}
             node={target}
-            onSendToForge={sendToForge}
+            onOpenInForge={openInForge}
             speakers={looks}
             projectId={projectId}
             onOpenRun={openRun}
@@ -406,13 +410,13 @@ export function ChatAside({
 
 function TargetChat({
   node,
-  onSendToForge,
+  onOpenInForge,
   speakers,
   projectId,
   onOpenRun,
 }: {
   node: Node;
-  onSendToForge?: () => void;
+  onOpenInForge?: (paths: readonly string[], runId?: string) => void;
   speakers: ReadonlyMap<string, AgentLook>;
   projectId: string | undefined;
   onOpenRun: (runId: string) => void;
@@ -434,7 +438,7 @@ function TargetChat({
       <ChatConversation
         node={node}
         convo={convo}
-        onSendToForge={onSendToForge}
+        {...(onOpenInForge === undefined ? {} : { openInForge: onOpenInForge })}
         speakers={speakers}
         onOpenRun={onOpenRun}
         {...(projectId === undefined ? {} : { projectId })}

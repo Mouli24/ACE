@@ -7,12 +7,14 @@ import {
   type StartRunRequest,
 } from '@ace/contracts';
 import type { AceSocketStatus } from '@ace/sdk';
+import { toast } from '@ace/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
 import { queryKeys } from '../workflows/query-keys';
+import { adoptRun } from './adopt-run';
 import { useRunStore } from './run-store';
 
 /**
@@ -87,21 +89,35 @@ export function useSocketStatus(): AceSocketStatus {
 /**
  * `POST /workflows/:id/runs` (FR-EXE-001). A BLOCKED run is a normal 201 with pre-flight issues
  * (FR-EXE-003), so it is a success here and the screen renders the issues.
+ *
+ * [audit W-1] A start the engine refuses (a 409, the engine away) puts back the run that was on
+ * screen — `arm` cleared it — and says why in a toast. `quiet`: the caller says why itself (Domain's
+ * composer keeps the text and shows the reason, PG-1.5).
  */
-export function useStartRun(workflowId: Id) {
+export function useStartRun(workflowId: Id, { quiet = false }: { quiet?: boolean } = {}) {
   const arm = useRunStore((store) => store.arm);
   const begin = useRunStore((store) => store.begin);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: StartRunRequest) => api().startRun(workflowId, body),
     // Armed before the request goes out, so a frame that beats the 201 is still folded (§2.4).
-    onMutate: () => arm(workflowId),
+    onMutate: (): { workflowId: Id | undefined; runId: Id | undefined } => {
+      const { workflowId: previousWorkflowId, runId } = useRunStore.getState();
+      arm(workflowId);
+      return { workflowId: previousWorkflowId, runId };
+    },
     onSuccess: (run: Run) => {
       begin(workflowId, run.id, run.status);
       queryClient.setQueryData(queryKeys.run(run.id), run);
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs(workflowId) });
     },
-    onError: () => useRunStore.getState().reset(),
+    onError: (error, _body, previous) => {
+      useRunStore.getState().reset();
+      if (previous?.workflowId !== undefined && previous.runId !== undefined) {
+        void adoptRun(previous.workflowId, previous.runId);
+      }
+      if (!quiet) toast.error('Could not start the run', { description: error.message });
+    },
   });
 }
 
@@ -150,6 +166,18 @@ export function useNodeRunsOnce(runId: Id | undefined) {
     enabled: Boolean(runId),
   });
 }
+
+/**
+ * A run of this workflow is in flight — what disables the header's Run (PG-1.2). [audit W-8] Every
+ * other way to start one (Run from here, Start from this node, Run again with changes) reads the
+ * same, so a second run never starts beside the first.
+ */
+export function useRunGoing(workflowId: Id): boolean {
+  return useRunStore((store) => store.workflowId === workflowId && store.active);
+}
+
+/** [audit W-8] The title a start action carries while {@link useRunGoing} holds it back. */
+export const RUN_GOING_TITLE = 'A run is going — stop it first';
 
 /** Which Input nodes still have nothing to send — what the input dialog asks for (FR-NODE-011). */
 export function inputNodesNeedingText(
@@ -205,6 +233,13 @@ export const useResumeRun = () => useRunControl((runId) => api().resumeRun(runId
 export const useStopRun = () => useRunControl((runId) => api().stopRun(runId));
 export const useRestartRun = () => useRunControl((runId) => api().restartRun(runId));
 /**
+ * D388: carry on a run that was cut off (HALTED crash, shutdown or stopped) — every interrupted node
+ * runs again with its downstream, in one drive of the *same* run, and what finished is kept. Not a
+ * `RUN_ACTIONS` value: whether it applies is the contract's `canContinueRun`, which the engine
+ * enforces too (409 otherwise).
+ */
+export const useContinueRun = () => useRunControl((runId) => api().continueRun(runId));
+/**
  * PG-5.4: replay a finished run — a new run answered from this one's recording, zero provider
  * calls. Only COMPLETE and HALTED runs can be replayed ({@link canReplay}).
  */
@@ -252,7 +287,8 @@ export function useRerunNode() {
  * engine says what is pending (BR-01).
  */
 export function useApprovals(runId: Id | undefined, extraRevision?: number) {
-  const revision = useRunStore((store) => store.revision);
+  // [audit W-3] not `revision`: that moves on every streamed token, and each move was a refetch
+  const revision = useRunStore((store) => store.approvalRevision);
   return useQuery({
     queryKey: [
       ...queryKeys.approvals(runId ?? ''),

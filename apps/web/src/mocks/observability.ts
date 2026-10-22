@@ -242,6 +242,7 @@ export function buildTrace(db: MockDb, run: Run): TraceEntry[] {
         case 'run.config':
         case 'run.blocked':
         case 'run.parked':
+        case 'node.turn':
           label = type;
           break;
       }

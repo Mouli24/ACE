@@ -41,7 +41,7 @@ export function SettingField({
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
       {error && (
-        <p role="alert" className="text-[11px] leading-[1.45] text-[#c94c27]">
+        <p role="alert" className="text-[11px] leading-[1.45] text-danger">
           {error}
         </p>
       )}

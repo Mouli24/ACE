@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { WorkspaceSummarySchema } from './agent.js';
 import { DataTypeSchema, type DataType } from './enums.js';
 import { IdSchema, PortIdSchema, TimestampSchema, outputTypesWithSchema } from './graph.js';
 import { VerdictSchema } from './guardrails.js';
@@ -225,6 +226,12 @@ export const EnvelopeSchema = z.strictObject({
    * per message and may fan out; this one is one per edge. Absent on envelopes from before Domain.
    */
   teamEnvelopeId: IdSchema.optional(),
+  /**
+   * D378: what an agentic upstream node's step did in the project folder — the files it changed
+   * and the commands it ran — so the next node can build on it. Facts, never a history (BR-02).
+   * Absent on every envelope from a node with workspace access Off.
+   */
+  workspace: WorkspaceSummarySchema.optional(),
 });
 export type Envelope = z.infer<typeof EnvelopeSchema>;
 

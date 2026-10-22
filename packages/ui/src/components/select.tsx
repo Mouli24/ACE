@@ -7,7 +7,8 @@ import { cn } from '../lib/cn.js';
 /*
  * The Ace UI theme's custom dropdown (D328): a 38px trigger on the canvas colour that turns its
  * border orange while open, a ▾, and a menu 4px below it with a ✓ column. Radix keeps the
- * listbox semantics, keyboard and outside-click; the look is the theme's.
+ * listbox semantics, keyboard and outside-click; the look is the theme's. Audit U-6: keyboard focus
+ * on the trigger draws a 2px ring in the AA `--focus` colour.
  */
 
 export const Select = SelectPrimitive.Root;
@@ -21,7 +22,7 @@ export const SelectTrigger = forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      'flex h-[38px] w-full cursor-pointer items-center justify-between gap-2 rounded-[9px] border border-[var(--line)] bg-[var(--canvas)] px-3 text-left text-[13px] text-[var(--ink)] outline-none focus-visible:border-[#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50 data-[state=open]:border-[#ef6b3f] [&>span]:min-w-0 [&>span]:truncate',
+      'flex h-[38px] w-full cursor-pointer items-center justify-between gap-2 rounded-[9px] border border-[var(--line)] bg-[var(--canvas)] px-3 text-left text-[13px] text-[var(--ink)] outline-none focus-visible:border-[var(--focus)] focus-visible:shadow-[0_0_0_1px_var(--focus)] disabled:cursor-not-allowed disabled:opacity-50 data-[state=open]:border-[#ef6b3f] [&>span]:min-w-0 [&>span]:truncate',
       className,
     )}
     {...props}

@@ -115,12 +115,12 @@ export function BackupSection() {
         />
       </div>
       {exportBackup.isError && (
-        <p role="alert" className="text-[12px] text-[#c94c27]" data-testid="backup-export-error">
+        <p role="alert" className="text-[12px] text-danger" data-testid="backup-export-error">
           Export failed: {messageOf(exportBackup.error)}
         </p>
       )}
       {importBackup.isError && (
-        <p role="alert" className="text-[12px] text-[#c94c27]" data-testid="backup-import-error">
+        <p role="alert" className="text-[12px] text-danger" data-testid="backup-import-error">
           Import failed: {messageOf(importBackup.error)}
         </p>
       )}

@@ -48,7 +48,7 @@ export function TimelineComposer({ onSend, busy = false, placeholder }: Timeline
         send();
       }}
     >
-      <div className="flex items-end gap-2 rounded-[14px] border border-[var(--line)] bg-[var(--surface)] py-[10px] pl-4 pr-[10px] focus-within:border-[#ef6b3f]">
+      <div className="flex items-end gap-2 rounded-[14px] border border-[var(--line)] bg-[var(--surface)] py-[10px] pl-4 pr-[10px] focus-within:border-[var(--focus)]">
         <textarea
           aria-label="Message to send to the workflow"
           placeholder={placeholder ?? 'Send a message to the workflow…'}
@@ -65,7 +65,7 @@ export function TimelineComposer({ onSend, busy = false, placeholder }: Timeline
           data-testid="timeline-send"
           aria-label="Send to workflow"
           title="Send to workflow"
-          className="h-9 w-9 shrink-0 cursor-pointer rounded-[9px] border-none text-[16px] font-bold text-[#fff] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-default"
+          className="h-9 w-9 shrink-0 cursor-pointer rounded-[9px] border-none text-[16px] font-bold text-[#fff] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-default"
           style={{ background: canSend ? '#ef6b3f' : 'var(--sendOff)' }}
         >
           <Icons.ArrowUp aria-hidden size={12} />
