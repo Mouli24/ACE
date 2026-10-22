@@ -1,5 +1,6 @@
 import { useLayoutStore } from '../app/stores/layout';
 import { useComposerChips, type ChipSource } from '../chat/composer-chips';
+import { useEditorStore } from './editor/editor-store';
 import { languageOf } from './editor/languages';
 
 /**
@@ -54,21 +55,73 @@ export function setSelectionSource(next: SelectionSource): () => void {
   };
 }
 
+/** Saves one open buffer; true once the disk holds it (the workbench's `saveFile`). */
+export type BufferSaver = (projectId: string, path: string) => Promise<boolean>;
+
+let saver: BufferSaver | undefined;
+
+/** The workbench says how a buffer is saved before an agent hears of it; the returned function unregisters it. */
+export function setBufferSaver(next: BufferSaver): () => void {
+  saver = next;
+  return () => {
+    if (saver === next) saver = undefined;
+  };
+}
+
+/**
+ * [audit F-1] An agent reads and edits the file on disk, never the editor's buffer: an unsaved
+ * buffer is saved first, or the agent works on older text and its edit lands as a conflict. True
+ * when the disk holds what the editor shows; false when the save failed or met a conflict.
+ */
+export async function saveForAgent(
+  projectId: string,
+  path: string,
+  save: BufferSaver | undefined = saver,
+): Promise<boolean> {
+  if (useEditorStore.getState().projects[projectId]?.files[path]?.dirty !== true) return true;
+  return save === undefined ? false : save(projectId, path);
+}
+
+/** [audit F-1] The line a hand-over carries when the buffer could not be saved first. */
+export const unsavedNote = (path: string): string =>
+  `Note: ${path} has unsaved changes in the editor that are not on disk.`;
+
 /** Put a chip in the composer and bring the chat column into view. */
 export function askAgentAbout(chip: ChipSource): void {
   useComposerChips.getState().add(chip);
   if (!useLayoutStore.getState().chatOpen) useLayoutStore.getState().toggleChat();
 }
 
-/** Ctrl/⌘+L and the editor's "Ask agent": the selection. False when no editor is showing a file. */
-export function askAgentAboutSelection(): boolean {
+/**
+ * The chip, once the file's unsaved buffer is saved ([audit F-1]); a save that fails leaves the
+ * unsaved note in the message box beside it. A clean file, or no project named, hands over at once.
+ */
+function handOver(projectId: string | undefined, chip: ChipSource): void {
+  const dirty =
+    projectId !== undefined &&
+    useEditorStore.getState().projects[projectId]?.files[chip.path]?.dirty === true;
+  if (!dirty) {
+    askAgentAbout(chip);
+    return;
+  }
+  void saveForAgent(projectId, chip.path).then((saved) => {
+    if (!saved) useComposerChips.getState().prefill(unsavedNote(chip.path));
+    askAgentAbout(chip);
+  });
+}
+
+/**
+ * Ctrl/⌘+L and the editor's "Ask agent": the selection, in `projectId` (whose unsaved buffer is
+ * saved first, [audit F-1]). False when no editor is showing a file.
+ */
+export function askAgentAboutSelection(projectId?: string): boolean {
   const chip = source?.();
   if (chip === undefined) return false;
-  askAgentAbout(chip);
+  handOver(projectId, chip);
   return true;
 }
 
-/** The Explorer's "Ask agent about this file": the path, no text. */
-export function askAgentAboutFile(path: string): void {
-  askAgentAbout({ path, language: languageOf(path) });
+/** The Explorer's "Ask agent about this file": the path, no text — saved first, as above. */
+export function askAgentAboutFile(path: string, projectId?: string): void {
+  handOver(projectId, { path, language: languageOf(path) });
 }

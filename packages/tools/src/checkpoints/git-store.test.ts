@@ -19,6 +19,7 @@ import {
 } from '@ace/engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { projectWriteLocks } from '../agent/locks.js';
 import { createGitCheckpointStore, CHECKPOINT_FILE_MAX_BYTES } from './git-store.js';
 import { runStoreGit } from './run-store-git.js';
 
@@ -224,6 +225,28 @@ describe.skipIf(!hasGit)('D300 the private checkpoint store', () => {
       const { revert } = await checkpoint(() => write('new.ts', 'agent\n'));
       rmSync(join(root, 'new.ts'));
       expect(isCheckpointConflictError(await revert('new.ts').catch((e: unknown) => e))).toBe(true);
+    });
+
+    it('[audit F-9] takes the file’s write lock: a save holding it lands first, and the revert sees it', async () => {
+      write('a.ts', 'old\n');
+      const { revert } = await checkpoint(() => write('a.ts', 'agent\n'));
+      let release = (): void => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // a Forge save (or an agent's write) of the same file, holding its lock
+      const saving = projectWriteLocks.withLock(join(root, 'a.ts'), async () => {
+        await held;
+        write('a.ts', 'saved by the person\n');
+      });
+      const reverting = revert('a.ts').catch((e: unknown) => e);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(read('a.ts')).toBe('agent\n');
+      release();
+      await saving;
+      expect(isCheckpointConflictError(await reverting)).toBe(true);
+      expect(read('a.ts')).toBe('saved by the person\n');
+      expect(projectWriteLocks.size()).toBe(0);
     });
 
     it('never writes outside the project or into .git and .ace', async () => {

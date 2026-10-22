@@ -120,7 +120,7 @@ export function EditorHost({ projectId, path, initial, touch }: EditorHostProps)
       contextMenuGroupId: 'navigation',
       contextMenuOrder: 0,
       run: () => {
-        askAgentAboutSelection();
+        askAgentAboutSelection(shown.current?.projectId);
       },
     });
     return () => {
@@ -168,7 +168,10 @@ export function EditorHost({ projectId, path, initial, touch }: EditorHostProps)
     shown.current = { projectId, path };
     const view = viewStateOf(projectId, path);
     if (view !== null) editor.restoreViewState(view);
-    editor.focus();
+    // a Space preview in the Explorer keeps the focus on its row, this once ([audit F-11])
+    if (useEditorStore.getState().projects[projectId]?.focusOnShow === false) {
+      useEditorStore.getState().focusDone(projectId);
+    } else editor.focus();
     // Read after loaded(): the store's default bom is false, so a render-time value would hide the
     // BOM of the content just loaded.
     const loadedBom = useEditorStore.getState().projects[projectId]?.files[path]?.bom ?? false;

@@ -8,7 +8,7 @@ import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
 import { useExplorerStore } from './explorer-store';
 import { ExplorerView } from './ExplorerView';
-import { FileTree } from './FileTree';
+import { FILTER_ROWS_MAX, FileTree } from './FileTree';
 
 installMockServer();
 
@@ -71,6 +71,19 @@ describe('FR-GIT-003 the Explorer tree', () => {
     expect(onOpen).toHaveBeenLastCalledWith('README.md', { preview: false });
   });
 
+  it('[audit F-11] Space previews the file and keeps the focus on its row', async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const projectId = seed();
+    renderWithQuery(<FileTree projectId={projectId} label="Files" onOpen={onOpen} />);
+    const row = await screen.findByTestId('tree-item-README.md');
+    // a click selects the row (and previews); Space then previews the selected row again
+    await user.click(row);
+    await user.keyboard(' ');
+    expect(onOpen).toHaveBeenLastCalledWith('README.md', { preview: true, focus: false });
+    expect(row).toHaveFocus();
+  });
+
   it('moves with the arrow keys: down, right into a folder, left back out', async () => {
     const user = userEvent.setup();
     const projectId = seed();
@@ -104,6 +117,34 @@ describe('FR-GIT-003 the Explorer tree', () => {
     act(() => stops[0]!.focus());
     await user.keyboard('{ArrowDown}');
     expect(useExplorerStore.getState().projects[projectId]?.selected).toBe('src');
+  });
+
+  it('[audit F-14] an open folder says it is reading, and why it could not be read, under its row', async () => {
+    const user = userEvent.setup();
+    const projectId = seed();
+    let fail = (): void => undefined;
+    const failed = new Promise<void>((resolve) => {
+      fail = resolve;
+    });
+    server.use(
+      http.get('*/api/v1/projects/:id/files/tree', async ({ request }) => {
+        if (new URL(request.url).searchParams.get('path') !== 'src') return undefined;
+        await failed;
+        return HttpResponse.json(
+          { error: { kind: 'workflow', code: 'protected_path', message: 'Access is denied.' } },
+          { status: 403 },
+        );
+      }),
+    );
+    renderWithQuery(<FileTree projectId={projectId} label="Files" onOpen={vi.fn()} />);
+    await user.click(await screen.findByTestId('tree-item-src'));
+    expect(await screen.findByText('Reading the folder…')).toHaveStyle({ paddingLeft: '22px' });
+
+    fail();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn.t read src: /);
+    expect(screen.queryByText('Reading the folder…')).toBeNull();
+    // the rest of the tree is still there
+    expect(screen.getByTestId('tree-item-README.md')).toBeInTheDocument();
   });
 
   it('says so when the folder cannot be read', async () => {
@@ -201,5 +242,25 @@ describe('D334 the Explorer’s header and filter', () => {
 
     await user.clear(screen.getByRole('textbox', { name: 'Filter files' }));
     expect(await screen.findByTestId('tree-item-src')).toBeInTheDocument();
+  });
+
+  it('[audit F-8] the filter renders at most 500 files and counts the rest', async () => {
+    const user = userEvent.setup();
+    const projectId = db.createProject({ name: 'Big' }).id;
+    db.seedFiles(
+      projectId,
+      Object.fromEntries(
+        Array.from({ length: FILTER_ROWS_MAX + 120 }, (_, i) => [`gen/file-${i}.ts`, '']),
+      ),
+    );
+    renderWithQuery(<ExplorerView projectId={projectId} />);
+    const tree = await screen.findByRole('tree', { name: 'Files of Big' });
+    await screen.findByTestId('explorer-count');
+
+    await user.type(screen.getByRole('textbox', { name: 'Filter files' }), 'file-');
+    expect(await screen.findByTestId('filter-more')).toHaveTextContent(
+      '120 more — keep typing to narrow the list.',
+    );
+    expect(within(tree).getAllByRole('treeitem')).toHaveLength(FILTER_ROWS_MAX);
   });
 });

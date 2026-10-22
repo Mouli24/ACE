@@ -12,6 +12,7 @@ import {
   type SnapshotRef,
 } from '@ace/engine';
 
+import { projectWriteLocks } from '../agent/locks.js';
 import { SAVE_TEMP_SUFFIX, atomicWrite } from '../workspace/fs-files.js';
 import { createIgnoreRules, type IgnoreRules } from '../workspace/ignore-rules.js';
 import { toAbsolute } from '../workspace/resolve.js';
@@ -598,19 +599,23 @@ export function createGitCheckpointStore(
         throw new CheckpointConflictError(path, uncapturedMessage(path, 'unreadable'));
       }
 
-      // Then the disk, compared and written at once. A write that lands between this read and
-      // the rename below is still overwritten: only an OS lock could close that window, and
-      // nothing slow runs inside it.
-      const now = await readDisk(absolute);
-      if (now === 'other' || !sameBytes(now?.bytes, agentLeft.blob)) {
-        throw new CheckpointConflictError(path);
-      }
-      if (was.blob === undefined) {
-        if (now !== undefined) await fs.rm(absolute, { force: true });
-        return;
-      }
-      await fs.mkdir(dirname(absolute), { recursive: true });
-      await atomicWrite(absolute, was.blob, now?.mode);
+      // Then the disk, compared and written at once, under the file's write lock ([audit F-9]):
+      // the one a Forge save and an agent's write take (PG-5.2), so neither lands between this
+      // read and the rename below. Only a writer outside ACE still could: an OS lock would close
+      // that window, and nothing slow runs inside it.
+      const blob = was.blob;
+      await projectWriteLocks.withLock(absolute, async () => {
+        const now = await readDisk(absolute);
+        if (now === 'other' || !sameBytes(now?.bytes, agentLeft.blob)) {
+          throw new CheckpointConflictError(path);
+        }
+        if (blob === undefined) {
+          if (now !== undefined) await fs.rm(absolute, { force: true });
+          return;
+        }
+        await fs.mkdir(dirname(absolute), { recursive: true });
+        await atomicWrite(absolute, blob, now?.mode);
+      });
     },
 
     async drop(projectId, checkpointId): Promise<void> {

@@ -8,6 +8,8 @@ import { ChangesView } from '../changes/ChangesView';
 import { openFile } from '../editor/actions';
 import { useFileList } from '../files/hooks';
 import { parentOf } from '../files/paths';
+import { EXPLORER_WIDTH, useForgeSizes } from '../layout/sizes';
+import { Splitter } from '../layout/Splitter';
 import { SearchView } from '../search/SearchView';
 import { useExplorerStore, useProjectExplorer } from './explorer-store';
 import { FileTree, type FollowedFiles } from './FileTree';
@@ -22,9 +24,10 @@ function fileCount(list: { files: readonly string[]; truncated: boolean } | unde
 }
 
 /**
- * The theme's Explorer (D334): a fixed 248px column. Its header switches EXPLORER · SEARCH ·
- * CHANGES (D299 Phase 4, D339) in the kit's pill, and the body is the view picked: the project's
- * files ({@link ExplorerFiles}), {@link SearchView} or D300's {@link ChangesView}.
+ * The theme's Explorer (D334): a 248px column — resizable from its right edge, as D299 has it, and
+ * remembered ([audit F-7]). Its header switches EXPLORER · SEARCH · CHANGES (D299 Phase 4, D339) in
+ * the kit's pill, and the body is the view picked: the project's files ({@link ExplorerFiles}),
+ * {@link SearchView} or D300's {@link ChangesView}.
  */
 export function ExplorerView({
   projectId,
@@ -41,6 +44,8 @@ export function ExplorerView({
   followed?: FollowedFiles | undefined;
 }) {
   const view = useSideViewStore((state) => state.view);
+  const width = useForgeSizes((state) => state.explorerWidth);
+  const setWidth = useForgeSizes((state) => state.setExplorerWidth);
   // D300: an agent-change marker asks for Changes on its checkpoint; the switch shows it, and the
   // request is settled so the next marker click asks again. Its `focus` stays for the outline.
   const requested = useProjectChanges(projectId).requested;
@@ -52,8 +57,18 @@ export function ExplorerView({
   return (
     <nav
       aria-label="Explorer"
-      className="flex w-[248px] shrink-0 flex-col border-r border-[var(--line)] bg-[var(--panel)]"
+      style={{ width }}
+      className="relative flex max-w-[50%] shrink-0 flex-col border-r border-[var(--line)] bg-[var(--panel)]"
     >
+      <Splitter
+        label="Resize the Explorer"
+        orientation="vertical"
+        grows="forward"
+        value={width}
+        bounds={EXPLORER_WIDTH}
+        onResize={setWidth}
+        className="right-[-4px]"
+      />
       <div className="flex items-center px-[10px] pb-[8px] pt-[10px]">
         <SideViewSwitch />
       </div>

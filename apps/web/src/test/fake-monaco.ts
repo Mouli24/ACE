@@ -52,14 +52,67 @@ export function createFakeMonaco() {
     let text = value;
     let alternative = 1;
     let disposed = false;
+    /** Set by `pushEOL`; otherwise the line ending is read from the text, as before. */
+    let eol: '\n' | '\r\n' | undefined;
+    /** Undo groups of `push*` edits, each the state before it, closed by `pushStackElement`. */
+    const undoStack: Array<{ text: string; alternative: number; eol: typeof eol }> = [];
+    let groupOpen = false;
     const listeners = new Set<() => void>();
+    const changed = (): void => listeners.forEach((listener) => listener());
+    const lineEnding = (): '\n' | '\r\n' => eol ?? (text.includes('\r\n') ? '\r\n' : '\n');
+    /** Before an undoable edit: the state it starts from, once per group. */
+    const remember = (): void => {
+      if (!groupOpen) undoStack.push({ text, alternative, eol });
+      groupOpen = true;
+    };
     const model = {
       uri,
       getValue: () => text,
       setValue(next: string) {
         text = next;
+        eol = undefined;
         alternative += 1;
-        listeners.forEach((listener) => listener());
+        changed();
+      },
+      /** The whole text's range; the fake's edits always replace all of it. */
+      getFullModelRange: () => {
+        const lines = text.split(/\r\n|\n/);
+        return {
+          startLineNumber: 1,
+          startColumn: 1,
+          endLineNumber: lines.length,
+          endColumn: (lines[lines.length - 1] ?? '').length + 1,
+        };
+      },
+      pushStackElement() {
+        groupOpen = false;
+      },
+      /** As Monaco: inserted text takes the model's line ending. Full-range edits only. */
+      pushEditOperations(_before: unknown, operations: Array<{ text: string | null }>) {
+        remember();
+        text = operations
+          .map((operation) => operation.text ?? '')
+          .join('')
+          .replace(/\r?\n/g, lineEnding());
+        alternative += 1;
+        changed();
+        return null;
+      },
+      /** `EndOfLineSequence`: 0 is LF, 1 is CRLF. */
+      pushEOL(sequence: number) {
+        remember();
+        eol = sequence === 1 ? '\r\n' : '\n';
+        text = text.replace(/\r?\n/g, eol);
+        alternative += 1;
+        changed();
+      },
+      /** Back to before the last undo group, at its alternative version id, as Monaco's undo. */
+      undo() {
+        const before = undoStack.pop();
+        groupOpen = false;
+        if (before === undefined) return;
+        ({ text, alternative, eol } = before);
+        changed();
       },
       getAlternativeVersionId: () => alternative,
       onDidChangeContent(listener: () => void) {
@@ -72,7 +125,7 @@ export function createFakeMonaco() {
         disposed = true;
         models.delete(uri.toString());
       },
-      getEOL: () => (text.includes('\r\n') ? '\r\n' : '\n'),
+      getEOL: lineEnding,
       getLanguageId: () => language,
       getOptions: () => ({ insertSpaces: true, tabSize: 2 }),
     };
@@ -176,6 +229,7 @@ export function createFakeMonaco() {
     },
     MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
     editor: {
+      EndOfLineSequence: { LF: 0, CRLF: 1 },
       createModel,
       create: createEditor,
       getModel: (uri: Uri) => models.get(uri.toString()) ?? null,

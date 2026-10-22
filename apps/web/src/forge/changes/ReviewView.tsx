@@ -1,6 +1,6 @@
 import { AceApiError } from '@ace/sdk';
 import { cn } from '@ace/ui';
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useState } from 'react';
 
 import { fileIconColor } from '../../theme/constants';
 import { nameOf } from '../files/paths';
@@ -13,6 +13,7 @@ import {
   useCheckpointFileDiff,
 } from './hooks';
 import { actionFailure, fileNote, fileStateLabel } from './present';
+import { RevertFileDialog, revertDeletes } from './RevertAllDialog';
 
 const ReviewDiffEditor = lazy(() =>
   import('./ReviewDiffEditor').then((module) => ({ default: module.ReviewDiffEditor })),
@@ -31,8 +32,9 @@ const CHANGE_WORD = { added: 'created', modified: 'changed', deleted: 'deleted' 
 
 /**
  * A "<file> (agent change)" tab's body (D300 §5.3): a bar with the file, what the agent did, its
- * `+/−` and — while it waits — Keep and Revert; then the read-only diff, before on the left and
- * after on the right. A binary file has no text diff and says so.
+ * `+/−` and — while it waits — Keep and Revert (asking first when it deletes the file, [audit
+ * F-3]); then the read-only diff, before on the left and after on the right. A binary file has no
+ * text diff and says so.
  */
 export function ReviewView({
   projectId,
@@ -51,6 +53,7 @@ export function ReviewView({
   const file = checkpoint.data?.files.find((candidate) => candidate.path === path);
   const failure = actionFailure(action.error);
   const note = file === undefined ? undefined : fileNote(file);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
     <div
@@ -90,7 +93,11 @@ export function ReviewView({
             <button
               type="button"
               disabled={action.isPending}
-              onClick={() => action.mutate({ action: 'revert', paths: [path] })}
+              onClick={() =>
+                revertDeletes(file)
+                  ? setConfirmDelete(true)
+                  : action.mutate({ action: 'revert', paths: [path] })
+              }
               className={cn(ROW_ACTION, 'text-[#c94c27] hover:text-[#c94c27]')}
             >
               Revert
@@ -102,6 +109,13 @@ export function ReviewView({
               {fileStateLabel(file)}
             </span>
           )
+        )}
+        {confirmDelete && (
+          <RevertFileDialog
+            path={path}
+            onConfirm={() => action.mutate({ action: 'revert', paths: [path] })}
+            onClose={() => setConfirmDelete(false)}
+          />
         )}
       </div>
       {note !== undefined && (

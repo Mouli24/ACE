@@ -43,6 +43,8 @@ import { nameProblem } from './names';
 import { useTreeRows } from './useTreeRows';
 
 const SAVING = 'Wait for the save to finish.';
+/** [audit F-8] The filter renders at most this many matching files; the rest are counted. */
+export const FILTER_ROWS_MAX = 500;
 const DRAG_TYPE = 'application/x-ace-path';
 /** Where a drop would land: the canvas's selection box, its orange wash and 1.5px line (D332). */
 const DROP_TARGET = 'bg-[rgba(239,107,63,0.06)] shadow-[inset_0_0_0_1.5px_#ef6b3f]';
@@ -53,8 +55,11 @@ export interface FileTreeProps {
   projectId: string;
   /** The tree's accessible name. */
   label: string;
-  /** A single click previews; a double click or Enter pins (§6.2's preview tab). */
-  onOpen(path: string, options: { preview: boolean }): void;
+  /**
+   * A single click previews; a double click or Enter pins (§6.2's preview tab). Space previews and
+   * keeps the focus in the tree (`focus: false`, [audit F-11]).
+   */
+  onOpen(path: string, options: { preview: boolean; focus?: boolean }): void;
   /** Non-empty: a flat list of the project's files whose path contains it (theme filter). */
   filter?: string;
   /** Path → the agent writing that file now, from the run (D334). */
@@ -136,6 +141,13 @@ export function FileTree({
   };
 
   const query = filter.trim().toLowerCase();
+  const matches = useMemo(
+    () =>
+      query === ''
+        ? []
+        : (list.data?.files ?? []).filter((path) => path.toLowerCase().includes(query)),
+    [query, list.data],
+  );
   const rows = useMemo<Row[]>(
     () =>
       query === ''
@@ -146,11 +158,13 @@ export function FileTree({
             ignored: entry.ignored,
             depth,
           }))
-        : (list.data?.files ?? [])
-            .filter((path) => path.toLowerCase().includes(query))
+        : matches
+            .slice(0, FILTER_ROWS_MAX)
             .map((path) => ({ path, name: path, folder: false, ignored: false, depth: 0 })),
-    [query, tree.rows, list.data],
+    [query, tree.rows, matches],
   );
+  /** Matching files past the rows rendered ([audit F-8]). */
+  const more = matches.length - Math.min(matches.length, FILTER_ROWS_MAX);
   const loading = query === '' ? tree.loading : list.isPending;
   const error = query === '' ? tree.error : list.error;
 
@@ -202,9 +216,9 @@ export function FileTree({
     store.getState().select(projectId, path);
     rowElements.current.get(path)?.focus();
   };
-  const activate = (row: Row, preview: boolean): void => {
+  const activate = (row: Row, preview: boolean, focus = true): void => {
     if (row.folder) store.getState().toggle(projectId, row.path);
-    else onOpen(row.path, { preview });
+    else onOpen(row.path, focus ? { preview } : { preview, focus: false });
   };
 
   const commitCreate = async (
@@ -287,7 +301,7 @@ export function FileTree({
         if (row) activate(row, false);
         break;
       case ' ':
-        if (row) activate(row, true);
+        if (row) activate(row, true, false);
         break;
       case 'F2':
         if (!editable || row === undefined) return;
@@ -532,6 +546,30 @@ export function FileTree({
     );
     if (editing?.mode === 'create' && query === '' && folder && editing.parent === path && isOpen)
       rendered.push(inputRow(depth + 1));
+    // [audit F-14] an open folder still listing, or unreadable, says so under its row
+    const status = folder && isOpen && query === '' ? tree.folders.get(path) : undefined;
+    if (status !== undefined) {
+      rendered.push(
+        'error' in status ? (
+          <p
+            key={`${path}\u0000status`}
+            role="alert"
+            className={cn(note, 'text-[#c94c27]')}
+            style={{ paddingLeft: 8 + (depth + 1) * 14 }}
+          >
+            Couldn’t read {name}: {messageOf(status.error)}
+          </p>
+        ) : (
+          <p
+            key={`${path}\u0000status`}
+            className={note}
+            style={{ paddingLeft: 8 + (depth + 1) * 14 }}
+          >
+            Reading the folder…
+          </p>
+        ),
+      );
+    }
   }
 
   const folderPath = project.data?.folderPath ?? '';
@@ -559,6 +597,11 @@ export function FileTree({
         <p className={note}>{query === '' ? 'This folder is empty.' : 'No files match.'}</p>
       )}
       {rendered}
+      {more > 0 && (
+        <p data-testid="filter-more" className={note}>
+          {more.toLocaleString()} more — keep typing to narrow the list.
+        </p>
+      )}
     </div>
   );
 
@@ -612,7 +655,7 @@ export function FileTree({
                   <>
                     <ContextMenuSeparator />
                     {/* D302: the file, by its path, as a chip in the chat composer. */}
-                    <ContextMenuItem onSelect={() => askAgentAboutFile(target.path)}>
+                    <ContextMenuItem onSelect={() => askAgentAboutFile(target.path, projectId)}>
                       Ask Agent About This File
                     </ContextMenuItem>
                   </>

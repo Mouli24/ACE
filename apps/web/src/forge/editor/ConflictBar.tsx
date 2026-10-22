@@ -2,7 +2,7 @@ import { Button, cn } from '@ace/ui';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { nameOf } from '../files/paths';
-import { keepMine, saveFile, takeTheirs } from './actions';
+import { closeFiles, keepMine, saveFile, takeTheirs } from './actions';
 import { useCloseRequest } from './CloseDialogs';
 import type { Conflict } from './editor-store';
 
@@ -10,7 +10,10 @@ import type { Conflict } from './editor-store';
 const BAR =
   'flex min-h-[34px] shrink-0 items-center gap-[8px] border-b border-[var(--line)] bg-[var(--panel)] py-[4px] pl-[18px] pr-[12px] text-[12px] text-[var(--ink)]';
 
-/** §5.4: the disk moved on under unsaved work. Compare, Take theirs, or Keep mine (the next save wins). */
+/**
+ * §5.4: the disk moved on under unsaved work. Compare, Take theirs, or Keep mine (the next save
+ * wins); for a file deleted on disk, Discard and close, or Keep mine (the next save puts it back).
+ */
 export function ConflictBar({
   projectId,
   path,
@@ -25,10 +28,8 @@ export function ConflictBar({
   onCompare(): void;
 }) {
   const queryClient = useQueryClient();
-  const { request, dialog } = useCloseRequest(projectId);
   return (
     <div role="alert" data-testid="conflict-bar" className={BAR}>
-      {dialog}
       <span className="min-w-0 flex-1">
         {conflict === 'deleted'
           ? `${nameOf(path)} was deleted on disk while you were editing it.`
@@ -40,7 +41,9 @@ export function ConflictBar({
         </Button>
       )}
       {conflict === 'deleted' ? (
-        <Button size="sm" variant="secondary" onClick={() => request([path])}>
+        // [audit F-4] The button is the discard: it closes at once. Through the unsaved-changes
+        // dialog it offered Save, which a deleted-file conflict always refuses.
+        <Button size="sm" variant="secondary" onClick={() => closeFiles(projectId, [path])}>
           Discard and close
         </Button>
       ) : (
@@ -74,6 +77,35 @@ export function DeletedBar({ projectId, path }: { projectId: string; path: strin
       </Button>
       <Button size="sm" onClick={() => void saveFile(projectId, path, queryClient)}>
         Save
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * [audit F-5] The disk's file is binary or over 2 MB now: Forge can't show that version, and never
+ * saves text over it. Close (Discard and close with unsaved text, at once, as F-4's) is the way out;
+ * the buffer stays to copy from meanwhile.
+ */
+export function NotTextBar({
+  projectId,
+  path,
+  kind,
+  dirty,
+}: {
+  projectId: string;
+  path: string;
+  kind: 'binary' | 'too_large';
+  dirty: boolean;
+}) {
+  return (
+    <div role="alert" data-testid="not-text-bar" className={BAR}>
+      <span className="min-w-0 flex-1">
+        {nameOf(path)} is {kind === 'binary' ? 'binary' : 'over 2 MB'} on disk now, so Forge can’t
+        show or save it.
+      </span>
+      <Button size="sm" variant="secondary" onClick={() => closeFiles(projectId, [path])}>
+        {dirty ? 'Discard and close' : 'Close'}
       </Button>
     </div>
   );
