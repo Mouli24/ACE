@@ -13,6 +13,7 @@ import { useEditorStatus } from './editor-status';
 import { applyForgeTheme } from './forge-theme';
 import { configureLanguageDefaults } from './language-defaults';
 import { languageOf } from './languages';
+import { registerPythonLanguage } from './python-language';
 import { watchMarkers } from '../panel/problems-store';
 import {
   ensureModel,
@@ -26,6 +27,8 @@ import {
 setMonaco(monaco);
 // TS/JS and JSON set for real projects before the first model exists (review I3).
 configureLanguageDefaults(monaco);
+// Python from the project's Pyright language server in the engine, as Pylance gives it in VS Code.
+registerPythonLanguage(monaco);
 // Problems follows every Forge model's markers from the moment the editor chunk loads (6.4).
 watchMarkers(monaco);
 
