@@ -31,7 +31,7 @@ function affectedNodeIds(error: unknown): string[] | undefined {
 function ErrorLine({ error }: { error: Error | null }) {
   if (!error) return null;
   return (
-    <p role="alert" className="text-[12px] text-[#c94c27]">
+    <p role="alert" className="text-[12px] text-danger">
       {error.message}
     </p>
   );

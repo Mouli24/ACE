@@ -36,7 +36,7 @@ export function WorkspaceHeader({
       <div className="flex items-center gap-[10px]">
         <Link
           to="/projects"
-          className="flex items-center gap-2 rounded-[4px] text-[var(--ink)] no-underline hover:text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="flex items-center gap-2 rounded-[4px] text-[var(--ink)] no-underline hover:text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
         >
           <LogoMark size={13} />
           <span className="text-[15px] font-bold tracking-[0.02em]">ACE</span>
@@ -76,7 +76,7 @@ function SplitToggle({ mode }: { mode: WorkflowMode }) {
       title={`${label} (${shortcutLabel(SHORTCUTS.toggleChat)})`}
       onClick={team ? toggleTeam : toggleChat}
       className={cn(
-        'flex h-7 cursor-pointer items-center gap-[6px] rounded-[8px] border px-[10px] text-[11px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+        'flex h-7 cursor-pointer items-center gap-[6px] rounded-[8px] border px-[10px] text-[11px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]',
         open
           ? 'border-[#ef6b3f] bg-[rgba(239,107,63,0.10)]'
           : 'border-[var(--line)] bg-transparent',

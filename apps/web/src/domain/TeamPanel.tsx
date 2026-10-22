@@ -133,7 +133,7 @@ export function TeamPanel({
             title="Close"
             aria-label="Close"
             onClick={onClose}
-            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             <Icons.X aria-hidden size={13} />
           </button>
@@ -191,7 +191,7 @@ export function TeamPanel({
                       aria-label={`Show ${node.name} on canvas`}
                       title="Show on canvas"
                       onClick={() => onShowOnCanvas(node.nodeId)}
-                      className="flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-[6px] border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                      className="flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-[6px] border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
                     >
                       <Icons.LocateFixed aria-hidden size={13} />
                     </button>

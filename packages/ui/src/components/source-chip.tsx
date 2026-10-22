@@ -29,7 +29,7 @@ export function formatScore(score: number): string {
 const chipClass =
   'inline-flex h-[22px] max-w-full items-center gap-[6px] rounded-full border border-[var(--line)] bg-[var(--surface)] px-[8px] text-[11.5px] text-[var(--ink)] no-underline';
 const interactiveClass =
-  'cursor-pointer outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'cursor-pointer outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 export function SourceChip({ source, score, via, onOpen, href, className }: SourceChipProps) {
   const scoreText = score === undefined ? undefined : formatScore(score);

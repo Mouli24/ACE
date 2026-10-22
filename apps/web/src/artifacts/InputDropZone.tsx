@@ -111,13 +111,13 @@ export function InputDropZone({ nodeId, workflowId, config, children }: InputDro
               role="alert"
               data-testid={`input-drop-error-${nodeId}`}
               data-code={state.error.code}
-              className="flex items-start gap-[6px] rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[8px] py-[6px] text-[10px] leading-[1.45] text-[#c94c27]"
+              className="flex items-start gap-[6px] rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[8px] py-[6px] text-[10px] leading-[1.45] text-danger"
             >
               <span className="flex-1">{uploadErrorMessage(state.error)}</span>
               <button
                 type="button"
                 aria-label="Dismiss upload error"
-                className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[10px] leading-none text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[10px] leading-none text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
                 onClick={reset}
               >
                 <Icons.X aria-hidden size={12} />

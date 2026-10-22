@@ -126,7 +126,7 @@ function SwitchRow({
       data-testid={testId}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="flex cursor-pointer items-center gap-[10px] rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-[10px] text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50"
+      className="flex cursor-pointer items-center gap-[10px] rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-[10px] text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span className="min-w-0 flex-1">
         <span id={titleId} className="block text-[12.5px] font-semibold">
@@ -228,7 +228,7 @@ export function SettingsPage() {
                 aria-label="Copy data folder path"
                 onClick={copyDataDir}
                 disabled={disabled}
-                className="absolute right-[6px] top-[6px] h-[26px] cursor-pointer rounded-[7px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[11px] font-semibold text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50"
+                className="absolute right-[6px] top-[6px] h-[26px] cursor-pointer rounded-[7px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[11px] font-semibold text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Copy
               </button>

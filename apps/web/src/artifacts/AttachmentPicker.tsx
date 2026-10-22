@@ -146,13 +146,13 @@ export function AttachmentPicker({
           role="alert"
           data-testid={`${testId}-error`}
           data-code={state.error.code}
-          className="flex items-start gap-2 text-[11px] leading-[1.45] text-[#c94c27]"
+          className="flex items-start gap-2 text-[11px] leading-[1.45] text-danger"
         >
           <span className="flex-1">{uploadErrorMessage(state.error)}</span>
           <button
             type="button"
             aria-label="Dismiss error"
-            className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[10px] text-[#c94c27] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[10px] text-danger outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
             onClick={reset}
           >
             <Icons.X aria-hidden size={12} />

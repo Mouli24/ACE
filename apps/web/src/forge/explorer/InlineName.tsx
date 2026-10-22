@@ -103,13 +103,13 @@ export function InlineName({
             if (value.trim() === '' || value === initial) onCancel(lost);
             else void commit(lost);
           }}
-          className="h-[24px] min-w-0 flex-1 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-[6px] text-[12.5px] font-medium [font-family:inherit] text-[var(--ink)] outline-none focus:border-[#ef6b3f] aria-[invalid=true]:border-[#c94c27]"
+          className="h-[24px] min-w-0 flex-1 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-[6px] text-[12.5px] font-medium [font-family:inherit] text-[var(--ink)] outline-none focus:border-[var(--focus)] aria-[invalid=true]:border-[#c94c27]"
         />
       </div>
       {problem !== undefined && (
         <p
           role="alert"
-          className="absolute left-0 right-[8px] z-10 mt-[2px] rounded-[6px] border border-[#c94c27] bg-[var(--surface)] px-[8px] py-[5px] text-[11.5px] leading-[1.4] text-[#c94c27] shadow-[0_18px_40px_-16px_rgba(30,20,10,0.45)]"
+          className="absolute left-0 right-[8px] z-10 mt-[2px] rounded-[6px] border border-[#c94c27] bg-[var(--surface)] px-[8px] py-[5px] text-[11.5px] leading-[1.4] text-danger shadow-[0_18px_40px_-16px_rgba(30,20,10,0.45)]"
           style={{ marginLeft: nameOffset(depth) }}
         >
           {problem}

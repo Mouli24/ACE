@@ -113,7 +113,7 @@ export function QuickOpen({ projectId }: { projectId: string }) {
             </li>
           ))}
           {list.isError && (
-            <li className={cn(NOTE, 'text-[#c94c27]')}>
+            <li className={cn(NOTE, 'text-danger')}>
               <span className="min-w-0 flex-1">
                 Could not list the project’s files: {list.error.message}.
               </span>

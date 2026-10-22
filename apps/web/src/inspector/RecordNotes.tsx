@@ -49,7 +49,7 @@ export function MemoryOpsList({ ops }: { ops: readonly MemoryOp[] | undefined })
       {ops.map((op, index) => (
         <li key={`${op.op}:${op.key}:${index}`} data-op={op.op} className="flex gap-2">
           <span
-            className={`shrink-0 font-machine text-[10.5px] ${op.op === 'save' ? 'text-[#2f9e63]' : 'text-[#c94c27]'}`}
+            className={`shrink-0 font-machine text-[10.5px] ${op.op === 'save' ? 'text-[#2f9e63]' : 'text-danger'}`}
           >
             {op.op === 'save' ? 'remembered' : 'forgot'}
           </span>

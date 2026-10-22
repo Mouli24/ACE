@@ -84,7 +84,7 @@ export function ProvidersPage() {
               <p className="text-[13px] text-[var(--muted)]">Loading providers…</p>
             )}
             {providers.isError && (
-              <p role="alert" className="text-[12px] text-[#c94c27]">
+              <p role="alert" className="text-[12px] text-danger">
                 Could not load providers: {providers.error.message}
               </p>
             )}
@@ -216,7 +216,7 @@ function ProviderRow({
         {why !== undefined && why !== '' && (
           <p
             data-testid={`provider-status-message-${provider.id}`}
-            className="mt-[3px] line-clamp-2 break-words text-[11px] leading-[1.45] text-[#c94c27]"
+            className="mt-[3px] line-clamp-2 break-words text-[11px] leading-[1.45] text-danger"
           >
             {why}
           </p>
@@ -267,7 +267,7 @@ function ProviderRow({
           <button
             type="button"
             aria-label={`Actions for ${provider.name}`}
-            className="grid h-6 cursor-pointer place-items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]"
+            className="grid h-6 cursor-pointer place-items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)]"
           >
             <Icons.Ellipsis aria-hidden size={14} />
           </button>
@@ -286,7 +286,7 @@ function ProviderRow({
         <p
           role="alert"
           data-testid={`provider-check-error-${provider.id}`}
-          className="basis-full text-[11px] leading-[1.45] text-[#c94c27]"
+          className="basis-full text-[11px] leading-[1.45] text-danger"
         >
           Test failed: {check.error.message}
         </p>

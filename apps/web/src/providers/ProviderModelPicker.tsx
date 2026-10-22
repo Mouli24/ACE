@@ -168,7 +168,7 @@ function modelName(model: Pick<Model, 'displayName' | 'modelId'>): string {
 /* ----------------------------------------------------------------- the two-step picker */
 
 const OPTION =
-  'flex w-full cursor-pointer items-center gap-[9px] rounded-[8px] border border-transparent bg-transparent px-[9px] py-[6px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] aria-selected:border-[var(--ink)] aria-selected:font-semibold disabled:cursor-not-allowed disabled:opacity-50';
+  'flex w-full cursor-pointer items-center gap-[9px] rounded-[8px] border border-transparent bg-transparent px-[9px] py-[6px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] aria-selected:border-[var(--ink)] aria-selected:font-semibold disabled:cursor-not-allowed disabled:opacity-50';
 
 function ProviderOption({
   provider,
@@ -349,7 +349,7 @@ export function ProviderModelPicker({
           )}
         </span>
         {refresh.data?.warning !== undefined && (
-          <p className="text-[11px] text-[#c94c27]">{refresh.data.warning}</p>
+          <p className="text-[11px] text-danger">{refresh.data.warning}</p>
         )}
         {chosen === undefined ? (
           <p className="text-[12px] text-[var(--muted)]">Choose a provider first.</p>
@@ -419,7 +419,7 @@ export function ProviderModelPicker({
 function ToProviders({ children }: { children: ReactNode }) {
   const inRouter = useInRouterContext();
   const className =
-    'inline-flex items-center gap-[6px] rounded-[4px] text-[12.5px] font-semibold text-[var(--ink)] underline outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+    'inline-flex items-center gap-[6px] rounded-[4px] text-[12.5px] font-semibold text-[var(--ink)] underline outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
   return inRouter ? (
     <Link to="/providers" className={className} data-testid="picker-connect-provider">
       {children}
@@ -478,7 +478,7 @@ function ConnectAProvider({
         </div>
       )}
       {create.isError && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           {create.error.message}
         </p>
       )}

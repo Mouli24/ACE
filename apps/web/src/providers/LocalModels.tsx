@@ -115,7 +115,7 @@ export function useTryModel(providerId: Id) {
 /* ---------------------------------------------------------------------------- pieces */
 
 const NOTE = 'text-[12px] text-[var(--muted)]';
-const ERROR = 'text-[12px] text-[#c94c27]';
+const ERROR = 'text-[12px] text-danger';
 
 /**
  * What the Local & open section says when there is no Ollama provider: not installed (with the
@@ -229,7 +229,7 @@ export function LocalModelActions({
         {loaded ? 'Unload' : 'Load'}
       </Button>
       {(load.isError || unload.isError) && (
-        <span role="alert" className="text-[10.5px] text-[#c94c27]">
+        <span role="alert" className="text-[10.5px] text-danger">
           {(load.error ?? unload.error)?.message}
         </span>
       )}

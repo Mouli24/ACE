@@ -188,7 +188,7 @@ export function ProviderAndModel({
 
 /** The theme's small square glyph button (28px, radius 7), for the fallback list's row actions. */
 const ROW_BUTTON_CLASS =
-  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border-none bg-transparent text-[12px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-45';
+  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border-none bg-transparent text-[12px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-not-allowed disabled:opacity-45';
 
 /**
  * The ordered fallback list (FR-RTR-002). Only meaningful under the `fallback` policy, and the
@@ -259,7 +259,7 @@ export function FallbackModels({
                 </button>
                 <button
                   type="button"
-                  className={cn(ROW_BUTTON_CLASS, 'hover:text-[#c94c27]')}
+                  className={cn(ROW_BUTTON_CLASS, 'hover:text-danger')}
                   aria-label={`Remove ${fallbackId}`}
                   onClick={() => onChange(fallbackModelIds.filter((value) => value !== fallbackId))}
                 >

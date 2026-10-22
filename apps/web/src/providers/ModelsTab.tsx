@@ -157,7 +157,7 @@ export function ModelsTab({ providers }: { providers: Provider[] }) {
         </p>
       )}
       {models.isError && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           Could not load models: {models.error.message}
         </p>
       )}

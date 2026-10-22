@@ -98,7 +98,7 @@ export function ReviewView({
                   ? setConfirmDelete(true)
                   : action.mutate({ action: 'revert', paths: [path] })
               }
-              className={cn(ROW_ACTION, 'text-[#c94c27] hover:text-[#c94c27]')}
+              className={cn(ROW_ACTION, 'text-danger hover:text-danger')}
             >
               Revert
             </button>
@@ -126,7 +126,7 @@ export function ReviewView({
       {(conflict !== undefined || failure !== undefined) && (
         <p
           role="alert"
-          className="m-0 shrink-0 border-b border-[var(--line)] px-[14px] py-[6px] text-[12px] text-[#c94c27]"
+          className="m-0 shrink-0 border-b border-[var(--line)] px-[14px] py-[6px] text-[12px] text-danger"
         >
           {conflict ?? failure}
         </p>

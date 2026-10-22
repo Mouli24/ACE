@@ -8,7 +8,7 @@ import { GUARDRAIL_ACTION_LABEL } from '@ace/ui';
 export const CHAT_NOTE_CLASS =
   'rounded-[12px] border border-[var(--line)] bg-[var(--surface)] px-[12px] py-[10px] text-[12px] leading-[1.45] text-[var(--ink)]';
 export const CHAT_NOTE_HEAD_CLASS =
-  'mb-1 flex flex-wrap items-center gap-[6px] text-[11px] font-semibold text-[#c94c27]';
+  'mb-1 flex flex-wrap items-center gap-[6px] text-[11px] font-semibold text-danger';
 
 /**
  * The verdicts on a refused chat input or a blocked reply (FR-CHAT-008). A `ChatVerdict` is a
@@ -28,7 +28,7 @@ export function ChatVerdicts({ verdicts }: { verdicts: readonly ChatVerdict[] })
           data-point={verdict.point}
           className="flex flex-col gap-[2px] rounded-[9px] border border-[var(--line)] bg-[var(--canvas)] px-[10px] py-[6px] text-[11px] leading-[1.4]"
         >
-          <span className="font-machine text-[#c94c27]">
+          <span className="font-machine text-danger">
             {GUARDRAIL_ACTION_LABEL[verdict.action]} · {verdict.checkType} · {verdict.point}
           </span>
           <span className="text-[12px] text-[var(--ink)]">{verdict.reason}</span>

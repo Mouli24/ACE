@@ -7,7 +7,7 @@ import { filterFromParams, paramsFromFilter, type TimelineFilter } from './timel
 
 /** The output card's action button, as a link (D328). */
 const ACTION_LINK =
-  'inline-flex h-[28px] items-center whitespace-nowrap rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'inline-flex h-[28px] items-center whitespace-nowrap rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * `/projects/:projectId/workflows/:workflowId/timeline` (round 4 §5 item 4): the workflow's whole

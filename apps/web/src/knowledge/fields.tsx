@@ -30,7 +30,7 @@ export const HELP = 'text-[11px] leading-[1.45] text-[var(--muted)]';
 export function FieldError({ id, message }: { id: string; message: string | undefined }) {
   if (!message) return null;
   return (
-    <p id={id} role="alert" className="text-[11px] leading-[1.45] text-[#c94c27]">
+    <p id={id} role="alert" className="text-[11px] leading-[1.45] text-danger">
       {message}
     </p>
   );

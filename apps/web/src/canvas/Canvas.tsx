@@ -430,7 +430,7 @@ function CanvasBreadcrumb({ workflowId }: { workflowId: string }) {
     >
       <Link
         to="/projects"
-        className="flex h-[24px] items-center rounded-full px-[10px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        className="flex h-[24px] items-center rounded-full px-[10px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       >
         HOME
       </Link>
@@ -2080,7 +2080,7 @@ function CanvasInner({
                   title="Who runs when"
                   onClick={() => setRunOrderOpen((open) => !open)}
                   className={cn(
-                    'absolute top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-full border bg-[var(--surface)] px-[14px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] focus-visible:border-[#ef6b3f]',
+                    'absolute top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-full border bg-[var(--surface)] px-[14px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] focus-visible:border-[var(--focus)]',
                     readOnly ? 'right-[16px]' : 'right-[136px]',
                     runOrderOpen ? 'border-[#ef6b3f]' : 'border-[var(--line)]',
                   )}
@@ -2108,7 +2108,7 @@ function CanvasInner({
                     data-testid="new-node-button"
                     title="Add an agent node"
                     onClick={addStage}
-                    className="absolute right-[16px] top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--surface)] py-0 pl-[6px] pr-[16px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] hover:shadow-[0_12px_30px_-12px_rgba(239,107,63,0.45)] focus-visible:border-[#ef6b3f]"
+                    className="absolute right-[16px] top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--surface)] py-0 pl-[6px] pr-[16px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] hover:shadow-[0_12px_30px_-12px_rgba(239,107,63,0.45)] focus-visible:border-[var(--focus)]"
                   >
                     <span
                       aria-hidden
@@ -2438,7 +2438,7 @@ function EdgeMenuItems({
         <button
           type="button"
           role="menuitem"
-          className={cn(EDGE_MENU_ITEM, 'text-[#c94c27]')}
+          className={cn(EDGE_MENU_ITEM, 'text-danger')}
           onClick={onDelete}
         >
           Delete connection

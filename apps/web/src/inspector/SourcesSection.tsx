@@ -82,7 +82,7 @@ function SourceItem({
             to={chunkHref(knowledgeBaseId, source)}
             data-testid="source-link"
             title="Open the document at this chunk"
-            className="rounded-full outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="rounded-full outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             {chip}
           </Link>
@@ -146,7 +146,7 @@ export function SourcesSection({ nodeRun }: { nodeRun: NodeRun }) {
       )}
       {dropped.length > 0 && (
         <details data-testid="dropped-sources" className="text-[12px]">
-          <summary className="cursor-pointer rounded-[4px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]">
+          <summary className="cursor-pointer rounded-[4px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]">
             Dropped to fit budget ({dropped.length})
           </summary>
           <ol className="m-0 mt-[6px] flex list-none flex-col gap-[6px] p-0">

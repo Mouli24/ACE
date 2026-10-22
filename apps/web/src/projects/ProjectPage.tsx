@@ -62,7 +62,7 @@ export function ProjectPage() {
     return (
       <main className="h-full overflow-y-auto">
         {isNotFound(project.error) ? (
-          <p role="alert" className="mx-auto max-w-[960px] px-6 py-8 text-[13px] text-[#c94c27]">
+          <p role="alert" className="mx-auto max-w-[960px] px-6 py-8 text-[13px] text-danger">
             Project not found. <Link to="/projects">Back to projects</Link>
           </p>
         ) : (
@@ -116,7 +116,7 @@ export function ProjectPage() {
             {importError && (
               <p
                 role="alert"
-                className="max-w-sm text-right text-[11px] leading-[1.45] text-[#c94c27]"
+                className="max-w-sm text-right text-[11px] leading-[1.45] text-danger"
               >
                 {importError}
               </p>
@@ -137,7 +137,7 @@ export function ProjectPage() {
             {workflows.data?.map((wf) => (
               <li
                 key={wf.id}
-                className="flex h-full flex-col rounded-[12px] border border-[var(--line)] bg-[var(--surface)] transition-colors focus-within:border-[#ef6b3f] hover:border-[#ef6b3f]"
+                className="flex h-full flex-col rounded-[12px] border border-[var(--line)] bg-[var(--surface)] transition-colors focus-within:border-[var(--focus)] hover:border-[#ef6b3f]"
               >
                 <Link
                   to={`/projects/${projectId}/workflows/${wf.id}`}

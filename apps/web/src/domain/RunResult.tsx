@@ -199,7 +199,7 @@ function FilesWritten({
             type="button"
             data-testid="run-result-open-all"
             onClick={() => onOpen(files.map((file) => file.path))}
-            className="shrink-0 text-[11px] font-semibold text-[#e8623a] hover:text-[#c94c27]"
+            className="shrink-0 text-[11px] font-semibold text-[#e8623a] hover:text-danger"
           >
             Open all in Forge
           </button>
@@ -223,7 +223,7 @@ function FilesWritten({
               type="button"
               data-testid="run-result-open-file"
               onClick={() => onOpen([file.path])}
-              className="shrink-0 text-[11px] font-semibold text-[#e8623a] hover:text-[#c94c27]"
+              className="shrink-0 text-[11px] font-semibold text-[#e8623a] hover:text-danger"
             >
               Open in Forge
             </button>

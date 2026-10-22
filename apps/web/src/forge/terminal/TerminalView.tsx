@@ -16,7 +16,7 @@ import { terminalTheme } from './xterm-theme';
 
 /** The Explorer's filter field (D334), a size down: the find box. */
 const FIND_FIELD =
-  'h-[26px] w-48 rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] font-machine text-[11px] text-[var(--ink)] outline-none focus:border-[#ef6b3f]';
+  'h-[26px] w-48 rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] font-machine text-[11px] text-[var(--ink)] outline-none focus:border-[var(--focus)]';
 
 /**
  * One terminal tab on screen (D301, design §6.3), in the theme's code view (D334): JetBrains Mono

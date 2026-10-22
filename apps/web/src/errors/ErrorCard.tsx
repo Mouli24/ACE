@@ -110,7 +110,7 @@ export function ErrorCard({
           <button
             type="button"
             onClick={onShowNode}
-            className="cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             show node
           </button>

@@ -11,7 +11,7 @@ import { RevertFileDialog, revertDeletes } from './RevertAllDialog';
 
 /** A row's quiet action, as the Processes list's: mono, small, a hover wash, the accent ring. */
 export const ROW_ACTION =
-  'shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent px-[5px] py-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-default disabled:opacity-50';
+  'shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent px-[5px] py-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-default disabled:opacity-50';
 
 /** `+3 −1` in the Explorer's added and deleted colours; `binary` for a binary file. */
 export function ChangeCounts({ file }: { file: CheckpointFile }) {
@@ -71,7 +71,7 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
                 title={`Review ${file.path}`}
                 onClick={() => onReview(file.path)}
                 className={cn(
-                  'flex min-w-0 flex-1 cursor-pointer items-baseline gap-[5px] rounded-[4px] border-none bg-transparent p-0 text-left text-[12px] text-[var(--ink)] outline-none hover:underline focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+                  'flex min-w-0 flex-1 cursor-pointer items-baseline gap-[5px] rounded-[4px] border-none bg-transparent p-0 text-left text-[12px] text-[var(--ink)] outline-none hover:underline focus-visible:shadow-[0_0_0_2px_var(--focus)]',
                   file.change === 'deleted' && 'line-through',
                   !pending && 'text-[var(--muted)]',
                 )}
@@ -106,7 +106,7 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
                         ? setConfirmDelete(file.path)
                         : onAction('revert', file.path)
                     }
-                    className={cn(ROW_ACTION, 'text-[#c94c27] hover:text-[#c94c27]')}
+                    className={cn(ROW_ACTION, 'text-danger hover:text-danger')}
                   >
                     Revert
                   </button>
@@ -123,7 +123,7 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
               <p className="m-0 pl-[12px] text-[11px] leading-[1.35] text-[var(--muted)]">{note}</p>
             )}
             {conflict !== undefined && (
-              <p role="alert" className="m-0 pl-[12px] text-[11px] leading-[1.35] text-[#c94c27]">
+              <p role="alert" className="m-0 pl-[12px] text-[11px] leading-[1.35] text-danger">
                 {conflict}
               </p>
             )}

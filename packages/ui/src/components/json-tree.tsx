@@ -87,7 +87,7 @@ function Node({ name, value, depth, defaultExpandedDepth }: NodeProps) {
       onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
       data-testid="json-node"
     >
-      <summary className="flex cursor-pointer list-none items-center gap-1 rounded-[4px] py-px outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center gap-1 rounded-[4px] py-px outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)] [&::-webkit-details-marker]:hidden">
         <span aria-hidden className="w-[10px] shrink-0 text-[10px] text-[var(--muted)]">
           {open ? <ChevronDown aria-hidden size={10} /> : <ChevronRight aria-hidden size={10} />}
         </span>

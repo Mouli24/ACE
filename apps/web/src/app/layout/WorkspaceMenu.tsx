@@ -113,7 +113,7 @@ export function WorkspaceMenu({
             type="button"
             aria-label="Workspace menu"
             data-testid="workspace-menu"
-            className="flex h-6 cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="flex h-6 cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             <Icons.MoreHorizontal aria-hidden size={14} />
           </button>

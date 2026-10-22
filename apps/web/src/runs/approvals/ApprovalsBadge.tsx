@@ -35,7 +35,7 @@ export function ApprovalsBadge({ runId }: { runId: Id | undefined }) {
           type="button"
           data-testid="approvals-badge"
           data-count={pending.length}
-          className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-full focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-full focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           aria-label={`${pending.length} ${pending.length === 1 ? 'approval' : 'approvals'} waiting`}
           onClick={() => setOpen(true)}
         >

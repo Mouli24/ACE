@@ -130,7 +130,7 @@ export function BottomPanel({ workflowId }: { workflowId: string }) {
             aria-label="Close problems & events"
             data-testid="bottom-toggle"
             onClick={toggle}
-            className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             <Icons.X aria-hidden size={12} />
           </button>

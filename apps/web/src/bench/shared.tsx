@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 
 /** The bench's cards, in the theme of the other uncovered screens (D328). */
 export const CARD = 'rounded-[12px] border border-[var(--line)] bg-[var(--surface)]';
-export const ERROR_TEXT = 'text-[12px] leading-[1.45] text-[#c94c27]';
+export const ERROR_TEXT = 'text-[12px] leading-[1.45] text-danger';
 export const MUTED_TEXT = 'text-[12px] leading-[1.45] text-[var(--muted)]';
 
 export const ARM_LABEL: Readonly<Record<BenchArm, string>> = {

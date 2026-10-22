@@ -20,7 +20,7 @@ import { OpenRunEnd, RunEstimateTag, useStartRunFlow } from '../../runs/useStart
 import { StopConfirm } from './WorkspaceMenu';
 
 const PILL =
-  'flex h-7 shrink-0 cursor-pointer items-center justify-center gap-[6px] rounded-[8px] border border-[var(--line)] bg-transparent text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent';
+  'flex h-7 shrink-0 cursor-pointer items-center justify-center gap-[6px] rounded-[8px] border border-[var(--line)] bg-transparent text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent';
 
 /**
  * PG-1.2 (D360): Run · Pause · Stop · Restart in the workspace header, in Ideate, Forge and Domain.

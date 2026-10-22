@@ -162,7 +162,7 @@ export function ApprovalCard({
               <p
                 role="note"
                 data-testid="approval-denylisted"
-                className="m-0 text-[12px] font-semibold text-[#c94c27]"
+                className="m-0 text-[12px] font-semibold text-danger"
               >
                 This matches the risky-command list.
               </p>
@@ -213,7 +213,7 @@ export function ApprovalCard({
             data-decision={decided}
             className={cn(
               'text-[12px] font-semibold',
-              decided === 'approve' ? 'text-[#2f9e63]' : 'text-[#c94c27]',
+              decided === 'approve' ? 'text-[#2f9e63]' : 'text-danger',
             )}
           >
             {decided === 'approve'

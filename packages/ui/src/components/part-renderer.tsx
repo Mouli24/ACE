@@ -31,7 +31,7 @@ function fileDotColor(name: string): string {
   return byExt[ext] ?? 'var(--iconLine)';
 }
 
-const FOCUS = 'outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const FOCUS = 'outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 export interface PartRendererProps {
   part: Part;

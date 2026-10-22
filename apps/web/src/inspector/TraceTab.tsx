@@ -114,7 +114,7 @@ export function TraceTab({ runId, nodeId }: { runId: Id; nodeId?: Id }) {
       {trace.isPending ? (
         <p className="m-0 py-3 text-center text-[13px] text-[var(--muted)]">Loading trace…</p>
       ) : trace.isError ? (
-        <p role="alert" className="m-0 text-[13px] text-[#c94c27]">
+        <p role="alert" className="m-0 text-[13px] text-danger">
           Could not load the trace: {trace.error.message}
         </p>
       ) : (

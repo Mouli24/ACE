@@ -69,7 +69,7 @@ export function SiteHeader() {
     <header className="sticky top-0 z-10 flex h-[44px] shrink-0 items-center gap-[10px] bg-[var(--hdr)] px-9 shadow-[0_1px_0_var(--line)] backdrop-blur-[10px]">
       <Link
         to="/projects"
-        className="flex items-center gap-[10px] rounded-[4px] text-[var(--ink)] no-underline hover:text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        className="flex items-center gap-[10px] rounded-[4px] text-[var(--ink)] no-underline hover:text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       >
         <LogoMark size={14} />
         <span className="text-[15px] font-bold tracking-[0.02em]">ACE</span>

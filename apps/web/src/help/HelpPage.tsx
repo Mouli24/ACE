@@ -43,7 +43,7 @@ export function HelpPage() {
                   to={`/help/${entry.slug}`}
                   aria-current={entry.slug === slug ? 'page' : undefined}
                   className={cn(
-                    'flex h-[26px] items-center whitespace-nowrap rounded-full border px-[14px] text-[12px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+                    'flex h-[26px] items-center whitespace-nowrap rounded-full border px-[14px] text-[12px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]',
                     entry.slug === slug
                       ? 'border-[var(--seg)] bg-[var(--seg)] text-[var(--segInk)] hover:text-[var(--segInk)]'
                       : 'border-[var(--pillOffLine)] bg-[var(--pillOff)] text-[var(--pillOffInk)] hover:bg-[var(--hover)] hover:text-[var(--pillOffInk)]',

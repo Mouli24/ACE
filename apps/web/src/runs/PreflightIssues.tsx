@@ -11,7 +11,7 @@ import { useStartRunFlow } from './useStartRunFlow';
 
 /** [audit W-16] A banner action: the header's run-control pill (PG-1.2). */
 const ACTION =
-  'flex h-7 shrink-0 cursor-pointer items-center justify-center rounded-[8px] border border-[var(--line)] bg-transparent px-[10px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-45';
+  'flex h-7 shrink-0 cursor-pointer items-center justify-center rounded-[8px] border border-[var(--line)] bg-transparent px-[10px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-not-allowed disabled:opacity-45';
 
 /**
  * Pre-flight refused the run (FR-EXE-003, BR-08). The run exists and is recorded; nothing was sent
@@ -63,7 +63,7 @@ export function PreflightIssues({ workflowId }: { workflowId: string }) {
           aria-label="Dismiss"
           data-testid="preflight-dismiss"
           onClick={() => setDismissed(runId)}
-          className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
         >
           <Icons.X aria-hidden size={12} />
         </button>
@@ -74,7 +74,7 @@ export function PreflightIssues({ workflowId }: { workflowId: string }) {
             key={index}
             className="flex min-h-[36px] items-center gap-[10px] border-t border-[var(--line)] py-[6px] text-[12.5px] first:border-t-0"
           >
-            <span className={`${CHIP_CLASS} shrink-0 bg-[#c94c271f] text-[#c94c27]`}>
+            <span className={`${CHIP_CLASS} shrink-0 bg-[#c94c271f] text-danger`}>
               {issue.code}
             </span>
             <span className="min-w-0 flex-1">{issue.message}</span>
@@ -84,7 +84,7 @@ export function PreflightIssues({ workflowId }: { workflowId: string }) {
                 // [audit W-10] select it and bring it into view
                 onClick={() => showNode(issue.nodeId as string)}
                 aria-label={`show node for ${issue.code}`}
-                className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]"
               >
                 show node
               </button>

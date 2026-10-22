@@ -21,7 +21,7 @@ const PILL =
 
 /** A pill's action: the header's run-control pill (PG-1.2). */
 const ACTION =
-  'flex h-7 shrink-0 cursor-pointer items-center justify-center rounded-[8px] border border-[var(--line)] bg-transparent px-[10px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-45';
+  'flex h-7 shrink-0 cursor-pointer items-center justify-center rounded-[8px] border border-[var(--line)] bg-transparent px-[10px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-not-allowed disabled:opacity-45';
 
 /** [audit L-2] How long "Run complete" stays over the Canvas once a run finishes in view. */
 export const RUN_COMPLETE_MS = 8_000;
@@ -266,7 +266,7 @@ function RunCompleteNote({
         type="button"
         aria-label="Dismiss"
         onClick={onDismiss}
-        className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       >
         <Icons.X aria-hidden size={12} />
       </button>

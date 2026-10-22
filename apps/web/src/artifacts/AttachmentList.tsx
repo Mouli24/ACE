@@ -13,7 +13,7 @@ export interface AttachmentListProps {
 
 /** The theme's quiet square glyph button (28px, radius 7). */
 const ROW_BUTTON_CLASS =
-  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border-none bg-transparent text-[12px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border-none bg-transparent text-[12px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /** One attached artifact: name, size, type, a download link (FR-MM-009) and a remove control. */
 function AttachmentRow({ id, onRemove }: { id: Id; onRemove?: (id: Id) => void }) {
@@ -53,7 +53,7 @@ function AttachmentRow({ id, onRemove }: { id: Id; onRemove?: (id: Id) => void }
           type="button"
           aria-label={`Remove ${artifact.data?.name ?? 'attachment'}`}
           data-testid={`attachment-remove-${id}`}
-          className={`${ROW_BUTTON_CLASS} hover:text-[#c94c27]`}
+          className={`${ROW_BUTTON_CLASS} hover:text-danger`}
           onClick={() => onRemove(id)}
         >
           <Icons.X aria-hidden size={12} />

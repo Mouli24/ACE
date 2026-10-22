@@ -63,7 +63,7 @@ export function ProjectCard({
   const workflowId = summary?.workflowId;
 
   return (
-    <div className="overflow-hidden rounded-[10px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_1px_3px_rgba(40,30,20,0.06),0_6px_20px_rgba(40,30,20,0.04)] [transition:transform_.2s,box-shadow_.2s] focus-within:border-[#ef6b3f] hover:shadow-[0_4px_24px_rgba(40,30,20,0.1)] hover:[transform:translateY(-2px)]">
+    <div className="overflow-hidden rounded-[10px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_1px_3px_rgba(40,30,20,0.06),0_6px_20px_rgba(40,30,20,0.04)] [transition:transform_.2s,box-shadow_.2s] focus-within:border-[var(--focus)] hover:shadow-[0_4px_24px_rgba(40,30,20,0.1)] hover:[transform:translateY(-2px)]">
       <Link
         to={`/projects/${project.id}`}
         onClick={open}
@@ -161,7 +161,7 @@ function ModeRow({
               event.preventDefault();
               onOpenMode(to);
             }}
-            className="inline-flex h-[22px] items-center rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="inline-flex h-[22px] items-center rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             {MODE_LABEL[mode]}
           </Link>

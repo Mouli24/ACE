@@ -73,7 +73,7 @@ export function NodeRunMenu({
           type="button"
           data-testid={`node-actions-${nodeId}`}
           aria-label={`Run actions for ${nodeName}`}
-          className="inline-flex h-[24px] cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="inline-flex h-[24px] cursor-pointer items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
         >
           <Icons.MoreHorizontal aria-hidden size={14} />
         </button>

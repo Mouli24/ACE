@@ -97,7 +97,7 @@ export function SkillsField({
               aria-checked={on}
               data-testid={`skill-${skill.id}`}
               onClick={() => toggle(skill, !on)}
-              className="flex cursor-pointer items-center gap-2.5 rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-2.5 text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f]"
+              className="flex cursor-pointer items-center gap-2.5 rounded-[9px] border border-[var(--line)] bg-transparent px-3 py-2.5 text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)]"
             >
               <div className="min-w-0 flex-1">
                 <div className="text-[12.5px] font-semibold">{skill.label}</div>

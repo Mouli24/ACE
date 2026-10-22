@@ -10,7 +10,7 @@ import { ConfirmDelete } from './ConfirmDelete';
  * where there is no hover.
  */
 
-const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /** The actions bar: hidden until its row is hovered or focused; always there without hover. */
 export const ACTIONS_CLASS =
@@ -225,7 +225,7 @@ export function EditBox({
             onCancel();
           }
         }}
-        className="block w-full resize-y rounded-[10px] border border-[var(--line)] bg-[var(--surface)] px-[10px] py-[8px] text-[12.5px] leading-[1.45] text-[var(--ink)] outline-none focus:border-[#ef6b3f]"
+        className="block w-full resize-y rounded-[10px] border border-[var(--line)] bg-[var(--surface)] px-[10px] py-[8px] text-[12.5px] leading-[1.45] text-[var(--ink)] outline-none focus:border-[var(--focus)]"
       />
       {changedFiles > 0 && (
         <label className="flex items-center gap-2 text-[11px] text-[var(--muted)]">

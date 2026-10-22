@@ -31,7 +31,7 @@ const ENTRIES: ReadonlyArray<{
     icon: '◇',
     title: 'Canvas',
     sub: 'Sketch, plan and arrange visually',
-    accent: 'hover:border-[#ef6b3f] focus-visible:border-[#ef6b3f]',
+    accent: 'hover:border-[#ef6b3f] focus-visible:border-[var(--focus)]',
     tile: 'bg-[#ef6b3f1f] text-[#ef6b3f]',
   },
   {
@@ -177,7 +177,7 @@ export function ProjectsPage() {
               data-testid="home-no-provider"
               className={cn(
                 PILL,
-                'no-underline outline-none hover:border-[var(--iconLine)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+                'no-underline outline-none hover:border-[var(--iconLine)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]',
               )}
             >
               <span
@@ -272,7 +272,7 @@ function FilterPill({
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        'h-[24px] shrink-0 cursor-pointer whitespace-nowrap rounded-full border px-[11px] text-[9px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+        'h-[24px] shrink-0 cursor-pointer whitespace-nowrap rounded-full border px-[11px] text-[9px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]',
         active
           ? 'border-[var(--seg)] bg-[var(--seg)] text-[var(--segInk)]'
           : 'border-[var(--pillOffLine)] bg-[var(--pillOff)] text-[var(--pillOffInk)]',

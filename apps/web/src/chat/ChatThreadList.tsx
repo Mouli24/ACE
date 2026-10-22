@@ -8,7 +8,7 @@ import { useDeleteThread } from './useChat';
 /** A 24px pill in the theme's tokens; the focus ring is the theme's orange. */
 const PILL =
   'flex h-[24px] shrink-0 items-center rounded-full border text-[11px] font-semibold text-[var(--ink)]';
-const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * The thread switcher for one node's session (FR-CHAT-004, D285): start a new thread, pick an
@@ -91,7 +91,7 @@ export function ChatThreadList({
                   onClick={() => setConfirming({ id: thread.id, title })}
                   className={cn(
                     FOCUS,
-                    '-my-px flex h-[24px] w-[24px] cursor-pointer items-center justify-center rounded-full text-[var(--muted)] hover:text-[#c94c27]',
+                    '-my-px flex h-[24px] w-[24px] cursor-pointer items-center justify-center rounded-full text-[var(--muted)] hover:text-danger',
                   )}
                 >
                   <Icons.X aria-hidden size={10} />

@@ -95,7 +95,7 @@ describe('D330 the workspace footer', () => {
       expect(notice).toHaveAttribute('data-testid', 'socket-forbidden-origin');
       expect(notice).toHaveTextContent('this address may not connect to the engine');
       expect(notice).toHaveAttribute('title', expect.stringContaining('allowedOrigins'));
-      expect(notice).toHaveClass('text-[#c94c27]');
+      expect(notice).toHaveClass('text-danger');
       expect(notice.firstElementChild).toHaveClass('h-[6px]', 'w-[6px]', 'rounded-full');
       expect(within(footer()).queryByText('Disconnected')).toBeNull();
       expect(screen.queryByTestId('socket-reconnecting')).toBeNull();

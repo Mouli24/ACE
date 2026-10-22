@@ -122,7 +122,7 @@ function ProblemsButton({
         if (mode !== 'ideate') navigate(workflowPath(projectId, workflowId, 'ideate', search));
         setBottomTab('validation');
       }}
-      className="flex h-[18px] shrink-0 cursor-pointer items-center gap-[4px] rounded-[5px] border-none bg-transparent px-[4px] text-[10px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] aria-pressed:text-[var(--ink)]"
+      className="flex h-[18px] shrink-0 cursor-pointer items-center gap-[4px] rounded-[5px] border-none bg-transparent px-[4px] text-[10px] text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)] aria-pressed:text-[var(--ink)]"
     >
       <Icons.PanelBottom aria-hidden size={11} strokeWidth={2} />
       Problems & events

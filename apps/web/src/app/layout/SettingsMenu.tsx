@@ -36,7 +36,7 @@ export function SettingsMenu({ placement }: { placement: 'footer' | 'corner' }) 
           data-testid="settings-menu"
           data-placement={placement}
           className={cn(
-            'flex shrink-0 cursor-pointer items-center justify-center rounded-full border p-0 leading-none focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+            'flex shrink-0 cursor-pointer items-center justify-center rounded-full border p-0 leading-none focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]',
             TRIGGER[placement],
           )}
         >

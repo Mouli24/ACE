@@ -37,7 +37,7 @@ const message = (error: unknown) =>
 
 /* The theme's vocabulary (D328). */
 const BODY = 'text-[13px] text-[var(--muted)]';
-const ERROR = 'text-[12px] text-[#c94c27]';
+const ERROR = 'text-[12px] text-danger';
 /** The theme's connection-type card: radius 10, a 1.5px border that turns ink when chosen. */
 const CHOICE_CARD =
   'flex items-start gap-[10px] rounded-[10px] border-[1.5px] bg-[var(--surface)] p-3 text-left text-[var(--ink)]';
@@ -159,7 +159,7 @@ export function OnboardingPage() {
             id="onboarding-step-heading"
             ref={headingRef}
             tabIndex={-1}
-            className="self-start rounded-[4px] text-[14px] font-bold outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="self-start rounded-[4px] text-[14px] font-bold outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             {current.label}
           </h2>
@@ -226,7 +226,7 @@ function ProviderStep({ onDone }: { onDone: (providerId: string) => void }) {
         type="button"
         className={cn(
           CHOICE_CARD,
-          'cursor-pointer border-[var(--line)] outline-none hover:border-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50',
+          'cursor-pointer border-[var(--line)] outline-none hover:border-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)] disabled:cursor-not-allowed disabled:opacity-50',
         )}
         onClick={() => void chooseMock()}
         disabled={create.isPending || providers.isPending}
@@ -287,7 +287,7 @@ function ProviderStep({ onDone }: { onDone: (providerId: string) => void }) {
         Have an API key for Anthropic, Google or OpenAI?{' '}
         <Link
           to="/providers"
-          className="rounded-[4px] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="rounded-[4px] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           data-testid="onboarding-keyed-provider"
         >
           Add a provider with a key
@@ -378,7 +378,7 @@ function TemplateCard({
       data-checked={checked}
       className={cn(
         CHOICE_CARD,
-        'cursor-pointer has-[:focus-visible]:shadow-[0_0_0_2px_#ef6b3f]',
+        'cursor-pointer has-[:focus-visible]:shadow-[0_0_0_2px_var(--focus)]',
         checked ? 'border-[var(--ink)]' : 'border-[var(--line)]',
       )}
     >
@@ -552,7 +552,7 @@ function CreateStep({
               data-testid={`onboarding-open-${mode}`}
               onClick={() => setOpenIn(mode)}
               className={cn(
-                'h-[28px] cursor-pointer rounded-full border px-[12px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+                'h-[28px] cursor-pointer rounded-full border px-[12px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]',
                 openIn === mode
                   ? 'border-[var(--ink)] bg-[var(--surface)]'
                   : 'border-[var(--line)] bg-transparent',

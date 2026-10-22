@@ -27,7 +27,7 @@ const onPick = (tab: ForgePanelTab): (() => void) | undefined =>
 
 /** The canvas bottom panel's 28px square (D328), for maximize and close. */
 const SQUARE =
-  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-[7px] border border-[var(--line)] bg-transparent text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * Forge's bottom panel (D299, D334 as amended), under the code column while the person has it open

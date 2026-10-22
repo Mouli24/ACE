@@ -33,7 +33,7 @@ export function ChatActivity({ items }: { items: readonly ActivityItem[] }) {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="flex cursor-pointer items-center gap-[6px] rounded-[6px] border-none bg-transparent p-0 text-[10.5px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        className="flex cursor-pointer items-center gap-[6px] rounded-[6px] border-none bg-transparent p-0 text-[10.5px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       >
         <span aria-hidden className={cn('inline-block transition-transform', open && 'rotate-90')}>
           ›

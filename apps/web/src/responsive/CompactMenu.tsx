@@ -29,7 +29,7 @@ export function CompactMenu({ projectId, status }: { projectId?: string; status?
         >
           <span
             aria-hidden
-            className="flex h-6 items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] group-focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="flex h-6 items-center rounded-full border border-[var(--line)] bg-[var(--soft)] px-[9px] text-[11px] text-[var(--ink)] group-focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             <Icons.MoreHorizontal aria-hidden size={14} />
           </span>

@@ -85,7 +85,7 @@ export function WorkflowLayout() {
       );
     }
     return (
-      <p role="alert" className="p-6 text-[13px] text-[#c94c27]">
+      <p role="alert" className="p-6 text-[13px] text-danger">
         Workflow not found.{' '}
         <Link to={`/projects/${projectId}`} className="underline">
           Back to the project

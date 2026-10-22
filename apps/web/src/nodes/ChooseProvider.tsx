@@ -52,7 +52,7 @@ export function ChooseProviderButton({ node }: { node: Node }) {
       type="button"
       data-testid={`choose-provider-${node.id}`}
       aria-label={`Choose a provider for ${node.name || 'Untitled'}`}
-      className="nodrag nopan mx-auto mt-[6px] inline-flex h-[24px] cursor-pointer items-center gap-[5px] rounded-full border border-[#c94c27] bg-[rgba(201,76,39,0.1)] px-[10px] text-[10.5px] font-semibold text-[#b03f1d] outline-none hover:bg-[rgba(201,76,39,0.18)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      className="nodrag nopan mx-auto mt-[6px] inline-flex h-[24px] cursor-pointer items-center gap-[5px] rounded-full border border-[#c94c27] bg-[rgba(201,76,39,0.1)] px-[10px] text-[10.5px] font-semibold text-[#b03f1d] outline-none hover:bg-[rgba(201,76,39,0.18)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       onPointerDown={stop}
       onMouseDown={stop}
       onClick={(event) => {

@@ -27,7 +27,7 @@ import { validateNumber, type NumberRange } from './validation';
 export const HELP_CLASS = 'text-[11px] leading-[1.45] text-[var(--muted)] [text-wrap:pretty]';
 
 /** The same line when it reports a problem: the theme's destructive ink. */
-export const ERROR_CLASS = 'text-[11px] leading-[1.45] text-[#c94c27] [text-wrap:pretty]';
+export const ERROR_CLASS = 'text-[11px] leading-[1.45] text-danger [text-wrap:pretty]';
 
 /** The theme's paired-fields grid: as many 220px-or-wider columns as fit, gap 20px 16px. */
 export const FIELD_GRID_CLASS =

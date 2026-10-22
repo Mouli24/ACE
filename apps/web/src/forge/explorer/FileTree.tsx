@@ -387,7 +387,7 @@ export function FileTree({
   if (error) {
     return (
       <div className={area}>
-        <p role="alert" className={cn(note, 'text-[#c94c27]')}>
+        <p role="alert" className={cn(note, 'text-danger')}>
           Couldn’t read the project folder: {messageOf(error)}
         </p>
       </div>
@@ -462,7 +462,7 @@ export function FileTree({
           {...(editable ? dragTargetProps(folder ? path : parentOf(path), true) : {})}
           onContextMenu={() => store.getState().select(projectId, path)}
           className={cn(
-            'flex h-[26px] w-full shrink-0 cursor-pointer select-none items-center gap-[7px] rounded-[6px] pr-[8px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]',
+            'flex h-[26px] w-full shrink-0 cursor-pointer select-none items-center gap-[7px] rounded-[6px] pr-[8px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]',
             active ? 'bg-[var(--hover)]' : 'bg-transparent',
             folder || active ? 'font-semibold' : 'font-medium',
             dropTarget === path && DROP_TARGET,
@@ -554,7 +554,7 @@ export function FileTree({
           <p
             key={`${path}\u0000status`}
             role="alert"
-            className={cn(note, 'text-[#c94c27]')}
+            className={cn(note, 'text-danger')}
             style={{ paddingLeft: 8 + (depth + 1) * 14 }}
           >
             Couldn’t read {name}: {messageOf(status.error)}

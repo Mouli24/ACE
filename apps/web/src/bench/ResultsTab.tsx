@@ -182,7 +182,7 @@ function Results({ id }: { id: Id }) {
           </div>
         </div>
         {parseError !== undefined && (
-          <p role="alert" className="text-[12px] text-[#c94c27]">
+          <p role="alert" className="text-[12px] text-danger">
             {parseError}
           </p>
         )}

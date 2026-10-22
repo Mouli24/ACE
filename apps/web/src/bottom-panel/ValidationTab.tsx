@@ -34,7 +34,7 @@ export function ValidationTab({ workflowId }: { workflowId: string }) {
           </span>
         )}
         {validate.error && (
-          <span role="alert" className="text-[12px] text-[#c94c27]">
+          <span role="alert" className="text-[12px] text-danger">
             {validate.error.message}
           </span>
         )}
@@ -50,7 +50,7 @@ export function ValidationTab({ workflowId }: { workflowId: string }) {
                 <span
                   role="img"
                   aria-label="error"
-                  className="w-[12px] shrink-0 text-center text-[11px] text-[#c94c27]"
+                  className="w-[12px] shrink-0 text-center text-[11px] text-danger"
                 >
                   ✕
                 </span>
@@ -68,7 +68,7 @@ export function ValidationTab({ workflowId }: { workflowId: string }) {
               {issue.nodeId && (
                 <button
                   type="button"
-                  className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                  className="shrink-0 cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]"
                   // [audit W-10] select it and bring it into view
                   onClick={() => showNode(issue.nodeId as string)}
                 >

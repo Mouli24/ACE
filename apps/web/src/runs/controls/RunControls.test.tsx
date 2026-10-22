@@ -269,11 +269,11 @@ describe('D328 theme pills: every control is a labelled pill', () => {
       expect(button).toHaveTextContent(name);
       expect(button).toHaveClass('rounded-full', 'h-[30px]');
     }
-    expect(screen.getByRole('button', { name: 'Stop' })).toHaveClass('text-[#c94c27]');
+    expect(screen.getByRole('button', { name: 'Stop' })).toHaveClass('text-danger');
     rerender(
       <RunControls runId={RUN} status="PAUSED" allowedActions={['resume']} onAction={vi.fn()} />,
     );
-    expect(screen.getByRole('button', { name: 'Stop' })).not.toHaveClass('text-[#c94c27]');
+    expect(screen.getByRole('button', { name: 'Stop' })).not.toHaveClass('text-danger');
   });
 
   it('shows no halt note when showHalt is false', () => {

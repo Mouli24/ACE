@@ -95,7 +95,7 @@ function ErrorLine({ error }: { error: Error | null }) {
   if (!error) return null;
   const issues = issueLines(error);
   return (
-    <div role="alert" className="text-[12px] text-[#c94c27]">
+    <div role="alert" className="text-[12px] text-danger">
       <p>{error.message}</p>
       {issues.length > 0 && (
         <ul className="mt-1 list-disc pl-4" data-testid="provider-form-issues">

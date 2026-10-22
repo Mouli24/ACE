@@ -57,7 +57,7 @@ export function ModeSwitch({ projectId, workflowId }: { projectId: string; workf
           title={`${label} (${keys})`}
           onClick={() => go(value)}
           className={cn(
-            'h-[26px] cursor-pointer rounded-full border px-4 text-[12px] font-semibold focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]',
+            'h-[26px] cursor-pointer rounded-full border px-4 text-[12px] font-semibold focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]',
             mode === value
               ? 'border-[var(--seg)] bg-[var(--seg)] text-[var(--segInk)]'
               : 'border-transparent bg-transparent text-[var(--muted)]',

@@ -111,7 +111,7 @@ export function CodeBlock({ language, text, className }: CodeBlockProps) {
           type="button"
           onClick={onCopy}
           aria-label={copied ? 'Copied' : 'Copy code'}
-          className="inline-flex h-[22px] cursor-pointer items-center gap-[5px] rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10.5px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="inline-flex h-[22px] cursor-pointer items-center gap-[5px] rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10.5px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
         >
           {copied && <Check aria-hidden size={11} strokeWidth={2.6} className="text-[#2f9e63]" />}
           {copied ? 'Copied' : 'Copy'}

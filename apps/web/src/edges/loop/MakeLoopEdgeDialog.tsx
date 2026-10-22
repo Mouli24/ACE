@@ -30,7 +30,7 @@ export interface LoopEdgeCandidate {
 
 /** The theme's footer pills: Close (soft, hairline) and Done (ink on canvas), 34px. */
 const PILL_CLASS =
-  'h-[34px] cursor-pointer rounded-full px-[22px] text-[13px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'h-[34px] cursor-pointer rounded-full px-[22px] text-[13px] font-semibold outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * Turning a drawn arrow into the graph's one legal cycle (FR-CON-007, TC-CON-007), in the node

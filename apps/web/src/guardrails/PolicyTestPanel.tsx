@@ -87,7 +87,7 @@ export function PolicyTestPanel({ policy }: { policy: GuardrailPolicy }) {
       </div>
 
       {test.error && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           {test.error.message}
         </p>
       )}

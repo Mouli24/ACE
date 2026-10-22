@@ -333,7 +333,7 @@ export function EventsTab({ entries, nodes = [], onShowNode }: EventsTabProps) {
                 {first !== undefined && onShowNode && (
                   <button
                     type="button"
-                    className="cursor-pointer border-none bg-transparent p-0 font-human text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                    className="cursor-pointer border-none bg-transparent p-0 font-human text-[11.5px] font-semibold text-[#e8623a] outline-none hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]"
                     onClick={() => onShowNode(first)}
                   >
                     show node

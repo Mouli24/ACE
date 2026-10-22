@@ -98,7 +98,7 @@ export function GuardrailsPage() {
           <p className="text-[13px] text-[var(--muted)]">Loading policies…</p>
         )}
         {policies.isError && (
-          <p role="alert" className="text-[12px] text-[#c94c27]">
+          <p role="alert" className="text-[12px] text-danger">
             Could not load policies: {policies.error.message}
           </p>
         )}
@@ -119,7 +119,7 @@ export function GuardrailsPage() {
                 >
                   <button
                     type="button"
-                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-[10px] rounded-[7px] text-left outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-[10px] rounded-[7px] text-left outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
                     onClick={() => setChosenPolicyId(policy.id)}
                   >
                     {/* The theme's radio dot: a 15px ring, a 7px ink dot when chosen. */}
@@ -181,7 +181,7 @@ export function GuardrailsPage() {
         )}
 
         {setDefault.error && (
-          <p role="alert" className="text-[12px] text-[#c94c27]">
+          <p role="alert" className="text-[12px] text-danger">
             {setDefault.error.message}
           </p>
         )}

@@ -152,7 +152,7 @@ function ExplorerFiles({
           placeholder="Filter files…"
           aria-label="Filter files"
           spellCheck={false}
-          className="h-[30px] w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[12px] [font-family:inherit] text-[var(--ink)] outline-none focus:border-[#ef6b3f]"
+          className="h-[30px] w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-[10px] text-[12px] [font-family:inherit] text-[var(--ink)] outline-none focus:border-[var(--focus)]"
         />
       </div>
     </>
@@ -178,7 +178,7 @@ function CreateButton({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="flex h-[20px] shrink-0 cursor-pointer items-center gap-[3px] rounded-[5px] border-none bg-transparent px-[5px] text-[12px] leading-none text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[inset_0_0_0_2px_#ef6b3f]"
+      className="flex h-[20px] shrink-0 cursor-pointer items-center gap-[3px] rounded-[5px] border-none bg-transparent px-[5px] text-[12px] leading-none text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[inset_0_0_0_2px_var(--focus)]"
     >
       <span aria-hidden>+</span>
       <span

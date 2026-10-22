@@ -146,7 +146,7 @@ export function TestSearchPanel({ kbId }: { kbId: Id }) {
       </form>
 
       {search.isError && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           Search failed: {search.error.message}
         </p>
       )}

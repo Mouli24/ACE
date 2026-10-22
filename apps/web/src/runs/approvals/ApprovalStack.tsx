@@ -217,7 +217,7 @@ function DestructiveToolPreview({ toolName, args }: { toolName: string; args: st
     >
       <p className="m-0 flex items-center gap-2 border-b border-[rgba(201,76,39,0.25)] bg-[rgba(201,76,39,0.10)] px-[14px] py-[8px]">
         <span aria-hidden className="h-[7px] w-[7px] shrink-0 rounded-full bg-[#c94c27]" />
-        <span className="font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-[#c94c27]">
+        <span className="font-machine text-[9.5px] font-medium uppercase tracking-[0.1em] text-danger">
           destructive tool call
         </span>
       </p>

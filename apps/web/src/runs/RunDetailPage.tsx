@@ -37,7 +37,7 @@ const SECTION_LABEL =
 
 /** The output card's action button, as a link: 28px, radius 8, hairline, `--chip`, 12px / 600. */
 const ACTION_LINK =
-  'inline-flex h-[28px] items-center whitespace-nowrap rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'inline-flex h-[28px] items-center whitespace-nowrap rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * `/runs/:runId` (round 2 §5 step 9, extended in round 3): one run — the snapshot it executed, the
@@ -92,7 +92,7 @@ export function RunDetailPage() {
   }
   if (run.isError) {
     return (
-      <p role="alert" className="p-6 text-center text-[13px] text-[#c94c27]">
+      <p role="alert" className="p-6 text-center text-[13px] text-danger">
         Could not load this run: {run.error.message}
       </p>
     );
@@ -248,7 +248,7 @@ export function RunDetailPage() {
                 key={index}
                 className="flex min-h-[36px] flex-wrap items-center gap-[10px] border-t border-[var(--line)] px-[14px] py-2 text-[12.5px] first:border-t-0"
               >
-                <span className={`${CHIP_CLASS} bg-[#c94c271f] text-[#c94c27]`}>{issue.code}</span>
+                <span className={`${CHIP_CLASS} bg-[#c94c271f] text-danger`}>{issue.code}</span>
                 <span className="min-w-0 flex-1">{issue.message}</span>
               </li>
             ))}

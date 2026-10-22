@@ -37,7 +37,7 @@ import { isChatNode, useDropStaleChatTarget } from './workflow-target';
 /** Tabs drawn before the rest go under "More" (the theme's tabs row). */
 const VISIBLE_TABS = 3;
 
-const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+const FOCUS = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /** A theme chat tab: 30px pill, ink border and surface when active (D335). */
 const tabClass = (active: boolean) =>

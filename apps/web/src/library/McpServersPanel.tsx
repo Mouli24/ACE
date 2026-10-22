@@ -60,7 +60,7 @@ export function McpServersPanel() {
 
       {servers.isPending && <p className="text-[13px] text-[var(--muted)]">Loading servers…</p>}
       {servers.isError && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           Could not load MCP servers: {servers.error.message}
         </p>
       )}
@@ -105,7 +105,7 @@ function McpServerRow({ server }: { server: McpServer }) {
           {address ? ` · ${address}` : ''}
         </p>
         {server.error && (
-          <p role="alert" className="mt-1 text-[11px] leading-[1.45] text-[#c94c27]">
+          <p role="alert" className="mt-1 text-[11px] leading-[1.45] text-danger">
             {server.error}
           </p>
         )}
@@ -122,7 +122,7 @@ function McpServerRow({ server }: { server: McpServer }) {
       </Button>
       <button
         type="button"
-        className={`${DIALOG_CLOSE_CLASS} text-[#c94c27] disabled:cursor-not-allowed disabled:opacity-50`}
+        className={`${DIALOG_CLOSE_CLASS} text-danger disabled:cursor-not-allowed disabled:opacity-50`}
         aria-label={`Remove ${server.name}`}
         disabled={remove.isPending}
         onClick={() => remove.mutate(server.id)}
@@ -248,7 +248,7 @@ function AddMcpServerDialog({ onClose }: { onClose: () => void }) {
           )}
 
           {create.isError && (
-            <p role="alert" className="text-[12px] text-[#c94c27]">
+            <p role="alert" className="text-[12px] text-danger">
               {AceApiError.is(create.error)
                 ? create.error.message
                 : 'Could not add the MCP server.'}

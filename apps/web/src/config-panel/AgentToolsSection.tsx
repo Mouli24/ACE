@@ -56,7 +56,7 @@ function PermissionChips({ permissions }: { permissions: ToolPermissions }) {
         </span>
       ))}
       {destructive && (
-        <span className={`${CHIP_CLASS} bg-[#c94c271f] text-[#c94c27]`}>destructive</span>
+        <span className={`${CHIP_CLASS} bg-[#c94c271f] text-danger`}>destructive</span>
       )}
     </span>
   );
@@ -233,7 +233,7 @@ function AllowedDomainsEditor({
               <button
                 type="button"
                 aria-label={`Remove ${host}`}
-                className="cursor-pointer border-none bg-transparent p-0 text-[10px] text-[var(--muted)] outline-none hover:text-[#c94c27] focus-visible:text-[#c94c27]"
+                className="cursor-pointer border-none bg-transparent p-0 text-[10px] text-[var(--muted)] outline-none hover:text-danger focus-visible:text-danger"
                 onClick={() => onChange(domains.filter((each) => each !== host))}
               >
                 <Icons.X aria-hidden size={12} />

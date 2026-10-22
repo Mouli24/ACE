@@ -9,7 +9,7 @@ export function HelpLink({ page, children }: { page: string; children: string })
     <Link
       to={`/help/${page}`}
       data-testid={`help-link-${page}`}
-      className="inline-flex items-center rounded-[4px] text-[11px] font-semibold text-[var(--muted)] underline-offset-2 outline-none hover:text-[var(--ink)] hover:underline focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      className="inline-flex items-center rounded-[4px] text-[11px] font-semibold text-[var(--muted)] underline-offset-2 outline-none hover:text-[var(--ink)] hover:underline focus-visible:shadow-[0_0_0_2px_var(--focus)]"
     >
       {children}
     </Link>

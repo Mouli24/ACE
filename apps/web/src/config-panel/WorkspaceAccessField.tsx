@@ -129,7 +129,7 @@ function AllowedCommands({
               <button
                 type="button"
                 aria-label={`Remove ${command}`}
-                className="cursor-pointer border-none bg-transparent p-0 text-[10px] text-[var(--muted)] outline-none hover:text-[#c94c27] focus-visible:text-[#c94c27]"
+                className="cursor-pointer border-none bg-transparent p-0 text-[10px] text-[var(--muted)] outline-none hover:text-danger focus-visible:text-danger"
                 onClick={() => onChange(commands.filter((each) => each !== command))}
               >
                 <Icons.X aria-hidden size={12} />
@@ -264,7 +264,7 @@ export function WorkspaceAccessField({
               title={cliLevels?.[level]?.unavailable}
               data-testid={`workspace-access-${level}`}
               onClick={() => set({ access: level })}
-              className={`flex cursor-pointer flex-col gap-0.5 rounded-[9px] border bg-transparent px-3 py-2.5 text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50 ${
+              className={`flex cursor-pointer flex-col gap-0.5 rounded-[9px] border bg-transparent px-3 py-2.5 text-left text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50 ${
                 on ? 'border-[#ef6b3f]' : 'border-[var(--line)]'
               }`}
             >

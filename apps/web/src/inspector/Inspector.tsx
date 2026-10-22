@@ -179,7 +179,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
               data-testid="inspector-error"
               className="flex flex-col gap-1 rounded-[10px] border border-[rgba(201,76,39,0.35)] bg-[var(--surface)] px-3 py-[10px] text-[12px]"
             >
-              <p className="m-0 font-machine text-[11px] text-[#c94c27]">
+              <p className="m-0 font-machine text-[11px] text-danger">
                 {nodeRun.error.kind} · {nodeRun.error.code}
               </p>
               <p className="m-0 text-[var(--ink)]">{nodeRun.error.message}</p>
@@ -240,7 +240,7 @@ export function Inspector({ workflowId }: { workflowId: string }) {
                     className={INNER_BOX}
                   >
                     <span
-                      className={`font-machine text-[11px] ${decision.decision === 'approve' ? 'text-[#2f9e63]' : 'text-[#c94c27]'}`}
+                      className={`font-machine text-[11px] ${decision.decision === 'approve' ? 'text-[#2f9e63]' : 'text-danger'}`}
                     >
                       {decision.decision === 'approve' ? 'approved' : 'rejected'} ·{' '}
                       {new Date(decision.decidedAt).toLocaleTimeString()}

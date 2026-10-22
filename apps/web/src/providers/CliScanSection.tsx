@@ -11,7 +11,7 @@ import { PROVIDER_TYPE_LABEL } from './provider-meta';
  * muted 11px 600.
  */
 const SMALL_BUTTON =
-  'h-[26px] shrink-0 cursor-pointer rounded-[7px] border border-[var(--line)] bg-[var(--canvas)] px-[10px] text-[11px] font-semibold text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:border-[#ef6b3f] disabled:cursor-not-allowed disabled:opacity-50';
+  'h-[26px] shrink-0 cursor-pointer rounded-[7px] border border-[var(--line)] bg-[var(--canvas)] px-[10px] text-[11px] font-semibold text-[var(--muted)] outline-none hover:bg-[var(--hover)] focus-visible:border-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50';
 
 /** A command the user runs in their own terminal, with a copy button (FR-PRV-008's hint). */
 function Command({ text }: { text: string }) {
@@ -117,7 +117,7 @@ export function CliScanSection({ onAdd }: { onAdd: (type: CliProviderType) => vo
       </div>
       {scan.isPending && <p className="text-[12px] text-[var(--muted)]">Scanning your terminal…</p>}
       {scan.isError && (
-        <p role="alert" className="text-[12px] text-[#c94c27]">
+        <p role="alert" className="text-[12px] text-danger">
           Could not scan: {scan.error.message}
         </p>
       )}

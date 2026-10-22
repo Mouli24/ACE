@@ -22,7 +22,7 @@ export function ProjectRunsPage() {
         <p className="text-center text-[13px] text-[var(--muted)]">Loading workflows…</p>
       )}
       {workflows.isError && (
-        <p role="alert" className="text-center text-[13px] text-[#c94c27]">
+        <p role="alert" className="text-center text-[13px] text-danger">
           Could not load workflows: {workflows.error.message}
         </p>
       )}

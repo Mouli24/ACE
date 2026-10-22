@@ -240,7 +240,7 @@ function OutputContractStatus({ nodeId }: { nodeId: Id }) {
       {verdict !== undefined && (
         <p
           className={
-            verdict.tone === 'fail' ? 'text-[12px] text-[#c94c27]' : 'text-[12px] text-[#2f7d52]'
+            verdict.tone === 'fail' ? 'text-[12px] text-danger' : 'text-[12px] text-[#2f7d52]'
           }
           data-testid="output-contract-verdict"
           data-verdict={verdict.tone === 'fail' ? 'CONTRACT_VIOLATION' : 'passed'}
@@ -582,7 +582,7 @@ const EMPTY_LINE_CLASS = 'py-2 text-center text-[13px] text-[var(--muted)]';
 
 /** The theme's text link: 11.5px / 600 in the accent. */
 const LINK_CLASS =
-  'self-start whitespace-nowrap text-[11.5px] font-semibold text-[#e8623a] no-underline outline-none hover:text-[#c94c27] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'self-start whitespace-nowrap text-[11.5px] font-semibold text-[#e8623a] no-underline outline-none hover:text-danger focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * [audit L-1] The Output node's result in the selected run (PG-3.2): what its node run recorded,

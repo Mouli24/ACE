@@ -56,7 +56,7 @@ export function NodeChatThreads({
             data-testid={`domain-node-chat-${thread.id}`}
             title="Open this chat in Ideate"
             onClick={() => open(thread.id)}
-            className="flex h-[24px] max-w-[16rem] cursor-pointer items-center gap-[6px] rounded-full border border-[var(--line)] bg-transparent px-[9px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+            className="flex h-[24px] max-w-[16rem] cursor-pointer items-center gap-[6px] rounded-full border border-[var(--line)] bg-transparent px-[9px] text-[11px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
           >
             <span className="min-w-0 truncate">{thread.title || 'New chat'}</span>
             <span className="font-machine text-[9px] font-normal text-[var(--muted)]">

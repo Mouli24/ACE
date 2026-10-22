@@ -285,7 +285,7 @@ function OpenInForgeChip({ message, forge }: { message: ChatMessage; forge: Agen
       type="button"
       data-testid="chat-open-in-forge"
       onClick={() => forge.open(files, message.runId)}
-      className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--chip)] px-[9px] text-[10px] font-semibold text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
     >
       Open in Forge
       <Icons.ArrowRight aria-hidden size={11} />
@@ -300,7 +300,7 @@ function SeeWholeRun({ runId, onOpenRun }: { runId: string; onOpenRun: (runId: s
       type="button"
       data-testid="chat-see-run"
       onClick={() => onOpenRun(runId)}
-      className="cursor-pointer whitespace-nowrap border-0 bg-transparent p-0 font-semibold text-[#e8623a] hover:text-[#c94c27] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      className="cursor-pointer whitespace-nowrap border-0 bg-transparent p-0 font-semibold text-[#e8623a] hover:text-danger focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
     >
       See the whole run →
     </button>
@@ -668,7 +668,7 @@ export function ChatConversation({
               <p className="whitespace-pre-wrap break-words">{request.reason}</p>
             ) : (
               request.command.denylisted && (
-                <p className="font-semibold text-[#c94c27]">This matches the risky-command list.</p>
+                <p className="font-semibold text-danger">This matches the risky-command list.</p>
               )
             )}
             <pre
@@ -682,7 +682,7 @@ export function ChatConversation({
                 type="button"
                 data-testid="chat-approval-approve"
                 onClick={() => convo.decideApproval(request, 'approve')}
-                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--ink)] px-[12px] text-[12px] font-semibold text-[var(--surface)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--ink)] px-[12px] text-[12px] font-semibold text-[var(--surface)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
               >
                 {request.command === undefined ? 'Approve' : 'Allow'}
               </button>
@@ -691,7 +691,7 @@ export function ChatConversation({
                   type="button"
                   data-testid="chat-approval-always"
                   onClick={() => convo.decideApproval(request, 'approve', true)}
-                  className="flex min-h-[28px] max-w-full cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] py-[4px] text-left text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                  className="flex min-h-[28px] max-w-full cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] py-[4px] text-left text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
                 >
                   <span className="break-all">
                     Always allow <span className="font-mono">{request.command.allowPrefix}</span>
@@ -702,7 +702,7 @@ export function ChatConversation({
                 type="button"
                 data-testid="chat-approval-reject"
                 onClick={() => convo.decideApproval(request, 'reject')}
-                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+                className="flex h-[28px] cursor-pointer items-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-[12px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
               >
                 {request.command === undefined ? 'Reject' : 'Deny'}
               </button>

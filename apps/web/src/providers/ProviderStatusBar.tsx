@@ -43,7 +43,7 @@ export function ProviderStatusBar() {
   return (
     <Link
       to="/providers"
-      className="flex shrink-0 items-center gap-1 rounded-full text-[var(--ink)] no-underline hover:text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f] xl:gap-1.5"
+      className="flex shrink-0 items-center gap-1 rounded-full text-[var(--ink)] no-underline hover:text-[var(--ink)] focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)] xl:gap-1.5"
       aria-label="Providers"
       data-testid="provider-status-bar"
     >

@@ -25,7 +25,7 @@ export interface CanvasToolbarProps {
 }
 
 const BUTTON =
-  'flex h-[28px] cursor-pointer items-center justify-center rounded-[6px] border-none bg-transparent p-0 outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'flex h-[28px] cursor-pointer items-center justify-center rounded-[6px] border-none bg-transparent p-0 outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /**
  * The theme's bottom-left toolbar (D332): zoom in, zoom out, the zoom (click: back to 100%), fit,

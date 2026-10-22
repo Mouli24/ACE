@@ -24,7 +24,7 @@ import { useCreateProject, useDeleteProject, useUpdateProject } from './hooks';
 /** A labelled field: label over control, 7px apart, as in the theme's settings modal. */
 const FIELD = 'flex flex-col gap-[7px]';
 /** An inline error line in the theme's red. */
-const ERROR_LINE = 'text-[12px] text-[#c94c27]';
+const ERROR_LINE = 'text-[12px] text-danger';
 /** A field's muted help line, under its control. */
 const HINT_LINE = 'text-[11px] leading-[1.45] text-[var(--muted)]';
 

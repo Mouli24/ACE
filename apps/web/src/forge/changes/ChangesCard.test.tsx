@@ -108,7 +108,7 @@ describe('D300 the Changes card under a chat turn', () => {
     expect(dialog).not.toHaveTextContent('deleted');
     // the theme's destructive button, as the Explorer's Delete confirm
     expect(within(dialog).getByRole('button', { name: 'Revert all' })).toHaveClass(
-      'text-[#c94c27]',
+      'text-danger',
     );
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 

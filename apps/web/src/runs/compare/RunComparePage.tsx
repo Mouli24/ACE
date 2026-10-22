@@ -67,7 +67,7 @@ export function RunComparePage() {
           Compare.
         </p>
       ) : runA.isError ? (
-        <p role="alert" className="text-[13px] text-[#c94c27]">
+        <p role="alert" className="text-[13px] text-danger">
           Could not load run {shortId(a)}: {runA.error.message}
         </p>
       ) : !runA.data ? (
@@ -75,7 +75,7 @@ export function RunComparePage() {
       ) : b === undefined ? (
         <PickRun run={runA.data} onPick={(id) => pick('b', id)} title="Compare this run with…" />
       ) : runB.isError ? (
-        <p role="alert" className="text-[13px] text-[#c94c27]">
+        <p role="alert" className="text-[13px] text-danger">
           Could not load run {shortId(b)}: {runB.error.message}
         </p>
       ) : !runB.data ? (
@@ -125,7 +125,7 @@ function PickRun({
               type="button"
               data-testid={`run-compare-pick-${candidate.id}`}
               onClick={() => onPick(candidate.id)}
-              className="flex min-h-11 w-full cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 bg-transparent px-[14px] py-[8px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+              className="flex min-h-11 w-full cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 bg-transparent px-[14px] py-[8px] text-left text-[12.5px] text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
             >
               <span>{new Date(candidate.startedAt).toLocaleString()}</span>
               <RunStateChip
@@ -237,7 +237,7 @@ function Comparison({
           data-testid="run-compare-swap"
           aria-label="Swap the two runs"
           title="Swap the two runs"
-          className="h-[28px] self-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+          className="h-[28px] self-center rounded-[8px] border border-[var(--line)] bg-[var(--chip)] px-3 text-[12px] font-semibold text-[var(--ink)] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
         >
           ⇄
         </button>
@@ -353,7 +353,7 @@ function NodeComparison({ pair }: { pair: NodePair }) {
           {pair.kind}
         </span>
         <span
-          className={`${CHIP_CLASS} ml-auto font-normal ${same ? 'bg-[var(--hover)] text-[var(--muted)]' : 'bg-[#ef6b3f1f] text-[#c94c27]'}`}
+          className={`${CHIP_CLASS} ml-auto font-normal ${same ? 'bg-[var(--hover)] text-[var(--muted)]' : 'bg-[#ef6b3f1f] text-danger'}`}
           data-testid={`run-compare-node-${pair.key}-verdict`}
         >
           {same ? 'same output' : 'output differs'}

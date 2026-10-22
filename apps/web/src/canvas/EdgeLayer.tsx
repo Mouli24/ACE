@@ -222,7 +222,7 @@ export interface EdgeReconnectDrag {
 }
 
 const CHIP_BUTTON =
-  'nopan nodrag flex cursor-pointer items-center gap-[3px] whitespace-nowrap rounded-[5px] border bg-[var(--chip)] py-[3px] pl-[8px] pr-[5px] text-[9.5px] font-medium text-[var(--muted)] outline-none hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:border-[#ef6b3f] focus-visible:ring-2 focus-visible:ring-[rgba(239,107,63,0.35)]';
+  'nopan nodrag flex cursor-pointer items-center gap-[3px] whitespace-nowrap rounded-[5px] border bg-[var(--chip)] py-[3px] pl-[8px] pr-[5px] text-[9.5px] font-medium text-[var(--muted)] outline-none hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:border-[var(--focus)] focus-visible:ring-2 focus-visible:ring-[rgba(239,107,63,0.35)]';
 
 /** The type dropdown's rows: every data type, the current one checked, the impossible ones greyed with why. */
 function EdgeTypeItems({ edgeId, edit }: { edgeId: string; edit: EdgeEditApi }) {
@@ -359,7 +359,7 @@ export const EdgeTypeChip = memo(function EdgeTypeChip({
           data-testid={`edge-remove-${id}`}
           aria-label="Remove connection"
           title="Remove connection"
-          className="nopan nodrag flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--chip)] text-[var(--muted)] outline-none hover:border-[#c94c27] hover:text-[#c94c27] focus-visible:border-[#c94c27] focus-visible:text-[#c94c27]"
+          className="nopan nodrag flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--chip)] text-[var(--muted)] outline-none hover:border-[#c94c27] hover:text-danger focus-visible:border-[#c94c27] focus-visible:text-danger"
           onClick={() => edit.remove(id)}
         >
           <Icons.X aria-hidden size={11} />
@@ -922,7 +922,7 @@ export const OrderEdgeLayer = memo(function OrderEdgeLayer({
                   data-testid={`order-edge-remove-${link.id}`}
                   aria-label={`Remove: ${label}`}
                   title="Remove this run-after link"
-                  className="flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--chip)] text-[var(--muted)] outline-none hover:border-[#c94c27] hover:text-[#c94c27] focus-visible:border-[#c94c27] focus-visible:text-[#c94c27]"
+                  className="flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full border border-[var(--frameLine)] bg-[var(--chip)] text-[var(--muted)] outline-none hover:border-[#c94c27] hover:text-danger focus-visible:border-[#c94c27] focus-visible:text-danger"
                   onClick={() => {
                     setHovered(undefined);
                     edit.remove(link.id);

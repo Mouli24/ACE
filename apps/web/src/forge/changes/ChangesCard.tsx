@@ -72,7 +72,7 @@ export function ChangesCard({
         </span>
       </header>
       {checkpoint.status === 'failed' && (
-        <p role="alert" className="m-0 text-[11.5px] leading-[1.4] text-[#c94c27]">
+        <p role="alert" className="m-0 text-[11.5px] leading-[1.4] text-danger">
           {failureNote(checkpoint)}
         </p>
       )}
@@ -80,7 +80,7 @@ export function ChangesCard({
         <CheckpointFiles checkpoint={checkpoint} busy={action.isPending} onReview={review} />
       )}
       {failure !== undefined && (
-        <p role="alert" className="m-0 text-[11px] text-[#c94c27]">
+        <p role="alert" className="m-0 text-[11px] text-danger">
           {failure}
         </p>
       )}
@@ -106,7 +106,7 @@ export function ChangesCard({
             type="button"
             disabled={action.isPending}
             onClick={() => setConfirmRevert(true)}
-            className={cn(ROW_ACTION, 'text-[#c94c27] hover:text-[#c94c27]')}
+            className={cn(ROW_ACTION, 'text-danger hover:text-danger')}
           >
             Revert all
           </button>

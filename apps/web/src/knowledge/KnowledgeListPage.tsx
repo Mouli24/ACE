@@ -45,7 +45,7 @@ export function KnowledgeListPage() {
           <p className="text-[13px] text-[var(--muted)]">Loading knowledge bases…</p>
         )}
         {bases.isError && (
-          <p role="alert" className="text-[12px] text-[#c94c27]">
+          <p role="alert" className="text-[12px] text-danger">
             Could not load knowledge bases: {bases.error.message}
           </p>
         )}
@@ -75,7 +75,7 @@ export function KnowledgeListPage() {
                 <Link
                   to={`/knowledge/${kb.id}`}
                   data-testid={`kb-card-${kb.id}`}
-                  className="flex h-full flex-col gap-1 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3 text-[var(--ink)] outline-none transition-colors hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:border-[#ef6b3f]"
+                  className="flex h-full flex-col gap-1 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3 text-[var(--ink)] outline-none transition-colors hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:border-[var(--focus)]"
                 >
                   <span className="truncate text-[13.5px] font-bold">{kb.name}</span>
                   <span

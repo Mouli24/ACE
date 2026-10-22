@@ -123,7 +123,7 @@ export function SaveErrorBar({
 }) {
   const queryClient = useQueryClient();
   return (
-    <div role="alert" data-testid="save-error-bar" className={cn(BAR, 'text-[#c94c27]')}>
+    <div role="alert" data-testid="save-error-bar" className={cn(BAR, 'text-danger')}>
       <span className="min-w-0 flex-1">
         Couldn’t save {nameOf(path)}: {message}
       </span>

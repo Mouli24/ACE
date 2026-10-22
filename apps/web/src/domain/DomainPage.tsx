@@ -230,7 +230,7 @@ export function DomainRunView() {
               data-testid="domain-team-sheet-open"
               aria-expanded={teamSheet}
               onClick={() => setTeamSheet((open) => !open)}
-              className="flex h-7 cursor-pointer items-center rounded-full border border-[var(--line)] bg-transparent px-[11px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+              className="flex h-7 cursor-pointer items-center rounded-full border border-[var(--line)] bg-transparent px-[11px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]"
             >
               Team
             </button>
@@ -269,7 +269,7 @@ export function DomainRunView() {
           }}
         >
           {conversation.error !== undefined && (
-            <p role="alert" className="px-6 pt-4 text-center text-[13px] text-[#c94c27]">
+            <p role="alert" className="px-6 pt-4 text-center text-[13px] text-danger">
               {conversation.error}
             </p>
           )}
@@ -376,7 +376,7 @@ export function DomainRunView() {
 }
 
 const PILL =
-  'flex h-7 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border pl-1.5 pr-[11px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'flex h-7 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border pl-1.5 pr-[11px] text-[12px] font-semibold text-[var(--ink)] outline-none focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /** A lens (D5): the theme's filter pill — an 18px avatar and the agent's name. */
 function FilterPill({
@@ -418,7 +418,7 @@ function FilterPill({
         aria-label={`Show ${label} on canvas`}
         title="Show on canvas"
         onClick={onShowOnCanvas}
-        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
       >
         <Icons.LocateFixed aria-hidden size={13} />
       </button>

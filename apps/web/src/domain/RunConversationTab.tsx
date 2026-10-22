@@ -64,7 +64,7 @@ export function RunConversationTab({
         <Link
           to={domainHref}
           data-testid="chat-run-open-domain"
-          className="shrink-0 font-semibold text-[#e8623a] hover:text-[#c94c27]"
+          className="shrink-0 font-semibold text-[#e8623a] hover:text-danger"
         >
           Open in Domain →
         </Link>
@@ -75,7 +75,7 @@ export function RunConversationTab({
         className="min-h-0 flex-1 overflow-y-auto"
       >
         {conversation.error !== undefined && (
-          <p role="alert" className="px-[14px] pt-3 text-center text-[12px] text-[#c94c27]">
+          <p role="alert" className="px-[14px] pt-3 text-center text-[12px] text-danger">
             {conversation.error}
           </p>
         )}

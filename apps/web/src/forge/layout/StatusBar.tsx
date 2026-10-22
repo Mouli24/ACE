@@ -38,7 +38,7 @@ export function ProblemsCount({ projectId }: { projectId: string }) {
       aria-label={`${plural(errors, 'error')}, ${plural(warnings, 'warning')}`}
       title="Problems"
       onClick={() => showPanel('problems')}
-      className="flex shrink-0 cursor-pointer items-center gap-[8px] rounded-[4px] border-none bg-transparent px-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      className="flex shrink-0 cursor-pointer items-center gap-[8px] rounded-[4px] border-none bg-transparent px-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
     >
       <span className="flex items-center gap-[4px]">
         <span
@@ -83,7 +83,7 @@ export function RunningCount({ projectId }: { projectId: string }) {
         requestTerminalFocus();
         showPanel('terminal');
       }}
-      className="flex shrink-0 cursor-pointer items-center gap-[4px] rounded-[4px] border-none bg-transparent px-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]"
+      className="flex shrink-0 cursor-pointer items-center gap-[4px] rounded-[4px] border-none bg-transparent px-[2px] font-machine text-[10px] text-[var(--muted)] outline-none hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)]"
     >
       <span aria-hidden data-testid="running-mark" className="flex" style={{ color: RUNNING }}>
         <Icons.Play aria-hidden size={9} fill="currentColor" />

@@ -9,7 +9,7 @@ import { checksBlocked, runChecks } from './run-checks';
 
 /** The path bar's "▶ Run pipeline" pill (D334), for the Problems header's own action. */
 const PILL =
-  'flex h-[24px] shrink-0 cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-[999px] border border-[var(--line)] bg-[var(--chip)] px-[10px] font-human text-[11px] font-semibold text-[var(--ink)] no-underline outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:border-[#ef6b3f] disabled:cursor-default disabled:opacity-[0.45] disabled:hover:bg-[var(--chip)]';
+  'flex h-[24px] shrink-0 cursor-pointer items-center gap-[6px] whitespace-nowrap rounded-[999px] border border-[var(--line)] bg-[var(--chip)] px-[10px] font-human text-[11px] font-semibold text-[var(--ink)] no-underline outline-none hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:border-[var(--focus)] disabled:cursor-default disabled:opacity-[0.45] disabled:hover:bg-[var(--chip)]';
 
 /**
  * Run checks in the Problems header (D299 Phase 4, design §6.4): runs the project's check command

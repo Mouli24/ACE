@@ -69,7 +69,7 @@ export function ToolPermissionBadges({
         <span
           data-testid="perm-destructive"
           title="Destructive — a call waits for your approval"
-          className={cn(badgeBase, 'bg-[#c94c271f] text-[#c94c27]')}
+          className={cn(badgeBase, 'bg-[#c94c271f] text-danger')}
         >
           destructive
         </span>

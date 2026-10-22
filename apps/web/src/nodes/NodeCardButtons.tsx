@@ -17,7 +17,7 @@ import { isStageKind } from './anchors';
 
 /** A card's icon button: 22px, the theme's hairline pill, its icon in the muted ink. */
 const BUTTON =
-  'nodrag nopan flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-full border border-[var(--line)] bg-[var(--surface)] p-0 text-[var(--muted)] outline-none hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_#ef6b3f] data-[state=open]:border-[#ef6b3f] data-[state=open]:text-[var(--ink)]';
+  'nodrag nopan flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-full border border-[var(--line)] bg-[var(--surface)] p-0 text-[var(--muted)] outline-none hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:shadow-[0_0_0_2px_var(--focus)] data-[state=open]:border-[#ef6b3f] data-[state=open]:text-[var(--ink)]';
 
 /**
  * PG-1.2 (D360): every card's always-visible ⚙ Settings and ⋯ More, top right. More holds the

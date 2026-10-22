@@ -68,7 +68,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
             href={href}
             target="_blank"
             rel="noreferrer noopener"
-            className="text-[#e8623a] underline underline-offset-2 hover:text-[#c94c27]"
+            className="text-[#e8623a] underline underline-offset-2 hover:text-danger"
           >
             {match[10]}
           </a>,

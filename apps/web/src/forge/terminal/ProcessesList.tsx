@@ -17,7 +17,7 @@ const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
 
 /** A row's quiet action, in the footer's mono: Show, and Stop in the theme's red. */
 const ROW_ACTION =
-  'shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent px-[5px] py-[2px] font-machine text-[10px] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_#ef6b3f]';
+  'shrink-0 cursor-pointer rounded-[5px] border-none bg-transparent px-[5px] py-[2px] font-machine text-[10px] outline-none hover:bg-[var(--hover)] focus-visible:shadow-[0_0_0_2px_var(--focus)]';
 
 /** The last line a process printed, plain, for its row. */
 function lastLine(output: string | undefined): string | undefined {
@@ -227,7 +227,7 @@ export function ProcessesList({ projectId }: { projectId: string }) {
                         type="button"
                         aria-label={`${agent ? 'Kill' : 'Stop'} ${summary.label}`}
                         onClick={() => stop.mutate(summary.id)}
-                        className={cn(ROW_ACTION, 'text-[#c94c27]')}
+                        className={cn(ROW_ACTION, 'text-danger')}
                       >
                         {agent ? 'Kill' : 'Stop'}
                       </button>

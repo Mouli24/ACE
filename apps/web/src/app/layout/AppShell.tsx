@@ -116,7 +116,7 @@ function SkipLink() {
         event.preventDefault();
         document.getElementById(MAIN_ID)?.focus();
       }}
-      className="sr-only rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-[13px] font-semibold text-[var(--ink)] focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:shadow-[0_0_0_2px_#ef6b3f]"
+      className="sr-only rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-[13px] font-semibold text-[var(--ink)] focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:shadow-[0_0_0_2px_var(--focus)]"
     >
       Skip to content
     </a>
