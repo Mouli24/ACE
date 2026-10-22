@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { getSocket } from '../../app/socket';
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
 import { useSideViewStore } from '../explorer/side-view-store';
@@ -131,11 +131,7 @@ function FileResults({ projectId, file }: { projectId: string; file: FileSearchF
             <Icons.ChevronRight aria-hidden size={10} />
           )}
         </span>
-        <span
-          aria-hidden
-          className="h-[7px] w-[7px] shrink-0 rounded-full"
-          style={{ background: fileIconColor(file.path) }}
-        />
+        <FileIcon path={file.path} />
         <span className="shrink-0 font-semibold">{nameOf(file.path)}</span>
         <span className="min-w-0 flex-1 truncate font-machine text-[10px] text-[var(--muted)]">
           {parentOf(file.path)}

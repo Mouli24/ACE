@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
+import { materialIcons } from './vite-material-icons';
+
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 /**
@@ -18,7 +20,7 @@ export const aliases = {
 };
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), materialIcons()],
   resolve: { alias: aliases },
   server: { port: 5173, strictPort: true },
   preview: { port: 4173 },

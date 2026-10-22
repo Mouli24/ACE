@@ -1,7 +1,7 @@
 import { Button, Dialog, DialogContent, DialogTitle, Input, MENU_ITEM_CLASS, cn } from '@ace/ui';
 import { useEffect, useMemo, useState } from 'react';
 
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { openFile } from '../editor/actions';
 import { useProjectEditor } from '../editor/editor-store';
 import { useFileList } from '../files/hooks';
@@ -101,11 +101,7 @@ export function QuickOpen({ projectId }: { projectId: string }) {
               onClick={() => choose(path)}
               className={cn(MENU_ITEM_CLASS, 'gap-[8px]')}
             >
-              <span
-                aria-hidden
-                className="h-[7px] w-[7px] shrink-0 rounded-full"
-                style={{ background: fileIconColor(path) }}
-              />
+              <FileIcon path={path} />
               <span className="shrink-0 truncate font-medium">{nameOf(path)}</span>
               <span className="min-w-0 truncate font-machine text-[10px] text-[var(--muted)]">
                 {parentOf(path)}

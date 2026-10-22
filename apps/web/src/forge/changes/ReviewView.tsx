@@ -2,7 +2,7 @@ import { AceApiError } from '@ace/sdk';
 import { cn } from '@ace/ui';
 import { Suspense, lazy, useState } from 'react';
 
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { nameOf } from '../files/paths';
 import { useCheckpointConflicts } from './changes-store';
 import { ChangeCounts, ROW_ACTION } from './CheckpointFiles';
@@ -63,11 +63,7 @@ export function ReviewView({
       role="region"
     >
       <div className="flex min-h-[32px] shrink-0 flex-wrap items-center gap-[8px] border-b border-[var(--line)] bg-[var(--panel)] px-[14px] py-[4px] text-[12px]">
-        <span
-          aria-hidden
-          className="h-[7px] w-[7px] shrink-0 rounded-full"
-          style={{ background: fileIconColor(path) }}
-        />
+        <FileIcon path={path} size={14} />
         <span className="min-w-0 truncate font-medium text-[var(--ink)]" title={path}>
           {path}
         </span>
