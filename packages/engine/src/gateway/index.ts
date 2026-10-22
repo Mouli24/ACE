@@ -96,6 +96,8 @@ import { createWorkspaceRoutes } from '../workspace/routes.js';
 import type { WorkspaceService } from '../workspace/service.js';
 import { createProcessRoutes } from '../processes/routes.js';
 import type { ProcessService } from '../processes/service.js';
+import { createLanguageRoutes } from '../language/routes.js';
+import type { LanguageService } from '../language/service.js';
 import { createCheckpointRoutes } from '../checkpoints/routes.js';
 import type { CheckpointService } from '../checkpoints/service.js';
 import {
@@ -215,6 +217,8 @@ export interface EngineDeps {
   processes?: ProcessService;
   /** `/projects/:id/checkpoints/*`: review, keep and revert agents' changes (D300). */
   checkpoints?: CheckpointService;
+  /** `/projects/:id/language/:language`: Forge's Python IntelliSense through Pyright. */
+  language?: LanguageService;
 
   /** `/bench/*`: ACE Bench's tasks, experiments, blind export, scores and report (PG-5.6). */
   bench?: BenchService;
@@ -589,6 +593,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
     await deps.processes?.stopProject(id);
     // Release the records (up to ~40 MB of output) only after the stop and the delete.
     deps.processes?.forgetProject(id);
+    await deps.language?.stopProject(id);
     return c.body(null, 204);
   });
 
@@ -1183,6 +1188,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
   api.route('/', createProcessRoutes(deps.processes));
   /* IDE (D300): checkpoints of agents' changes, inside the same middleware. */
   api.route('/', createCheckpointRoutes(deps.checkpoints));
+  /* Forge's Python IntelliSense, inside the same middleware. */
+  api.route('/', createLanguageRoutes(deps.language));
   /* PG-5.6: ACE Bench (Arch §20.2), inside the same middleware. */
   api.route('/', createBenchRoutes(deps.bench));
 

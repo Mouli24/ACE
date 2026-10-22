@@ -129,6 +129,12 @@ import {
   type RepoStatus,
   type SaveFileRequest,
   type SaveFileResult,
+  // Forge: Python IntelliSense through the project's language server
+  LanguageRequestSchema,
+  LanguageResponseSchema,
+  type LanguageRequest,
+  type LanguageResponse,
+  type LanguageServerLanguage,
   // Forge (D301): the terminal's processes
   ProcessDetailSchema,
   ProcessInputRequestSchema,
@@ -1061,6 +1067,25 @@ export function createAceClient(options: AceClientOptions) {
     /** The project's TS/JS sources for cross-file IntelliSense (D299 Phase 4), capped. */
     projectSources: (projectId: Id): Promise<SourcesResult> =>
       request('GET', `/projects/${projectId}/files/sources`, SourcesResultSchema),
+
+    /**
+     * One question to the project's language server (Python: Pyright) about one file; the LSP
+     * result as the server gave it. `signal` drops an answer the editor no longer wants.
+     */
+    languageRequest: (
+      projectId: Id,
+      language: LanguageServerLanguage,
+      body: LanguageRequest,
+      signal?: AbortSignal,
+    ): Promise<LanguageResponse> =>
+      request(
+        'POST',
+        `/projects/${projectId}/language/${language}`,
+        LanguageResponseSchema,
+        { schema: LanguageRequestSchema, value: body },
+        undefined,
+        signal,
+      ),
 
     /* IDE — Forge's terminal (D301, design §6.3) */
     startProcess: (projectId: Id, body: ProcessStartRequest): Promise<ProcessStartResponse> =>

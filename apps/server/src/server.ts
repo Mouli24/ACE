@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'node:fs';
 import type { Server } from 'node:http';
+import { createRequire } from 'node:module';
 import { userInfo } from 'node:os';
 import { join, relative, sep } from 'node:path';
 
@@ -46,6 +47,8 @@ import {
   createCheckpointService,
   createBenchService,
   createProcessService,
+  createLanguageService,
+  pyrightCommand,
   createProviderService,
   createDomainRegistry,
   createDomainService,
@@ -507,6 +510,13 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     // Task 14: Forge's Kill on a running background agent command goes to the run's agent session.
     killAgentCommand: async (runId, sessionProcessId) =>
       (await agentSessions.get(runId)?.processes.kill(sessionProcessId)) ?? false,
+  });
+  // Forge's Python IntelliSense: a Pyright language server per project, while it is being edited.
+  const language = createLanguageService({
+    repository,
+    scope: LOCAL_SCOPE,
+    logger: logger.child({ subsystem: 'language' }),
+    pyright: pyrightCommand(createRequire(import.meta.url).resolve('pyright/langserver.index.js')),
   });
   const hub = createWsHub({
     bus,
@@ -1356,6 +1366,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     processes,
     /* IDE (D300): review, keep and revert agents' changes. */
     checkpoints,
+    /* Forge's Python IntelliSense. */
+    language,
     /* PG-5.6: ACE Bench. */
     bench,
   });
@@ -1491,6 +1503,7 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       // database closes; none outlives the engine, even if an earlier step above rejected.
       workspace.stopAll();
       await processes.stopAll();
+      await language.stopAll();
       // PG-1.4 (D359): an Ollama this engine started stops with it; one the person started stays.
       await providers.stopLocalRuntime().catch(() => undefined);
       await Promise.all([...agentSessions.keys()].map((runId) => endAgentSession(runId)));
