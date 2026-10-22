@@ -268,4 +268,62 @@ the two token codemods.
 
 ## 11. Outcome
 
-_Filled in after implementation — see below._
+Implemented 2026-10-21/22 on `fix/app-audit` in six parallel tracks (isolated worktrees), merged in
+this order, plus a cleanup pass. Decisions D392–D401, defects D-104–D-122.
+
+| Track | Merge | Commits | Items |
+|---|---|---|---|
+| Security | `6aea89e9` | 8 | S-2, S-3, S-4, S-5, S-6, S-7, S-9, S-10 |
+| Providers | `e4f3ce43` | 18 | P-2 (partial), P-4, P-5, P-6, P-7, P-8, P-9, P-10, P-13 (in-session), P-14, P-15, P-18, P-20 (most) |
+| Web shell | `c1b941b1` | 15 | U-1, U-2 (+D-009), U-3, U-4, U-7/L-10, U-8, U-9, U-12, U-13, U-15–U-18, L-11, L-12, global mutation errors |
+| Engine | `e5d7e739` | 18 | E-1, E-2, E-4 + P-3, E-5, E-6, E-7, E-8, E-9, E-10, E-11, E-12, E-13, S-1, U-3 (SearXNG, MCP), U-4 |
+| Canvas, runs, chat | `e1b032f9` | 20 | L-1, L-2, L-4, L-13, W-1, W-3, W-4, W-5, W-6, W-8, W-9, W-10, W-11, W-13–W-17, W-20 |
+| Forge | `d08a2653` | 16 | F-1–F-14, F-7 (resizable Explorer and bottom panel), U-8 (lazy terminal) |
+| Cleanup | `c53d56b0`, `54f997fe`, `706c1530`, `28911942` | 4 | L-5 (`pnpm dev` builds packages), 5 unused dependencies, §6 dead code, U-5/U-6 token codemods (165 + 148 classes) |
+
+### 11.1 Status of every finding
+
+- **Fixed:** all High items except P-1 — E-1, E-2, E-4/P-3, E-8, P-2 (partial), L-1, L-13, U-1, U-2,
+  U-3, W-1/W-2, W-3/W-4, W-5, W-6, F-1 — and every Medium item in §§3–8 except those listed below.
+- **Partial:** P-2 (family capability defaults and Google token limits; the 8-entry manifest is
+  unchanged), P-13 (a removed Ollama is not re-added for the rest of the engine's life; persisting it
+  needs a settings field), P-20 (removing a stored key needs a contract change), E-4 (no per-turn cap
+  re-check inside one agentic node).
+- **Not done, with reasons:**
+  - **P-1 / E-3 — media to models (High, D-108).** It needs a `GenerateRequest` media field, executor
+    support and adapter mapping — a cross-package feature, not a fix. Recommended next.
+  - **P-17 (D-121).** Reporting UNKNOWN for an unverified CLI sign-in would block Gemini CLI at
+    pre-flight, so it waits on pre-flight accepting UNKNOWN for CLIs (P-11).
+  - **S-8 (D-122).** An artifact-scoped credential is a protocol change.
+  - **P-11, P-12, P-16, P-19, W-7, W-12, W-18, W-19, U-10, U-11, U-14.** These are deferred as Medium
+    or Low, or as design work. W-12 lives in graph-sync. W-18, U-10 and U-11 are the design-system
+    consolidation in §9.
+  - **L-3, L-15 (suspected).** Not reproduced.
+- **Dead code kept on purpose:** `NodeRunActions` (planned per-node Stop), `dropGraphSync` (should be
+  *wired* — graph-sync controllers are never disposed), two unused test helpers, the Forge output
+  store, `docs/team-prompts/CLAUDE.md` and `ACE-UI-inventory.md` (owner call).
+
+### 11.2 Verification
+
+| Check | Result |
+|---|---|
+| `pnpm build:packages`, `pnpm typecheck`, `pnpm lint` (whole workspace) | green |
+| Web production build | green — main chunk 2,058 → 1,511 kB (611 → 468 kB gzip); Forge chunk 99 kB |
+| contracts | 1,285 passed, 5 failed (the 5 pre-existing), 5 skipped |
+| engine | 2,088 passed, 5 failed (the 5 pre-existing: `trace-usage` ×1, `always-allow-routes` ×4) |
+| providers · tools · storage-local · guardrails · context · sdk · server | 543 · 773 (+1 fixed after merge, re-run green) · 316 · 357 · 52 · 181 · 198 — all passing |
+| ui | 323 passed, 1 failed (pre-existing PG-1.1 port-size test) |
+| web | 1,834 passed, 42 failed, 11 skipped. The 41 failures that were there before are unchanged, and one more is a timing flake (`TerminalPanel` "keeps a half-typed line…") that passes on its own. Two tests that broke at the merge were fixed (`0b16bcbc`). |
+| Live, isolated engine + web (fresh data dir, Mock provider, Playwright) | 9/9: onboarding → Parallel research run COMPLETE; "Run complete — See the result"; Output dialog shows the result; new project folder under `<dataDir>/projects`; gear lists Usage/Guardrails/Tools; in-app 404; a wrong token shows "The engine restarted"; no console errors; a failed node edited since its run offers "Run again with changes" and that run completes. Foreign Host → 403, no token → 401. |
+| Not run | `pnpm test:e2e` (MSW Playwright suite), `pnpm test:acceptance`, real paid providers |
+
+### 11.3 Needs an owner decision
+
+1. **Move existing projects.** All 11 live projects have folders inside code checkouts. D392 fixes
+   only new projects.
+2. **Real media parts (P-1).** This is the remaining High. Recommended: AI SDK image/file parts for
+   models whose catalog row lists the type, and a pre-flight refusal otherwise.
+3. **Design-system consolidation (§9).** One Button/IconButton/Switch/ConfirmDialog set, the type and
+   radius scales, and Tooltip instead of `title=`. The token codemods are done; the primitives are not.
+4. **Ownership map.** CLAUDE.md §3's engine/web split no longer matches how work is done (D94). This
+   audit crossed it deliberately.
