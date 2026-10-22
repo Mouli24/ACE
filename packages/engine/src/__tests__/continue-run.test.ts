@@ -206,6 +206,48 @@ describe('D388 FR-SYS-009 Continue a run the engine crashed under', () => {
   });
 });
 
+describe('[audit E-6] Continue a paused run the engine crashed under', () => {
+  it('a node the pause was holding is STOPPED by the recovery and runs again on Continue', async () => {
+    const h = await createRunDriverHarness();
+    const { a, b, merge } = await parallelFlow(h);
+    h.scripts.set('A', [{ hold: untilAborted() }]);
+    h.scripts.set('B', [{ hold: untilAborted() }]);
+
+    const { run, done } = await h.service.beginRun(h.workflowId, {});
+    await h.waitForState(a.id, 'RUNNING');
+    await h.waitForState(b.id, 'RUNNING');
+    await h.service.shutdown();
+    await done;
+    // As a process that died while paused leaves it: A's call in flight, B held by the pause.
+    await h.repository.runs.update(scope, run.id, {
+      status: 'PAUSED',
+      allowedActions: ['resume', 'stop'],
+    });
+    const [aRow] = await h.nodeRunsOf(run.id, a.id);
+    const [bRow] = await h.nodeRunsOf(run.id, b.id);
+    await h.repository.nodeRuns.update(scope, aRow!.id, { status: 'RUNNING' });
+    await h.repository.nodeRuns.update(scope, bRow!.id, { status: 'PAUSED' });
+
+    const next = await createRunDriverHarness({ repository: h.repository });
+    expect((await next.recover()).halted).toEqual([run.id]);
+    const crashed = await next.runRow(run.id);
+    expect(crashed).toMatchObject({ status: 'HALTED', haltReason: 'crash' });
+    expect(crashed.allowedActions).toEqual(['restart']);
+    expect((await next.nodeRunsOf(run.id, b.id)).map((row) => row.status)).toEqual(['STOPPED']);
+
+    await next.controls.continueRun(run.id);
+    await next.waitForEvent('run.completed', 2);
+
+    expect((await next.runRow(run.id)).status).toBe('COMPLETE');
+    expect(
+      (await next.nodeRunsOf(run.id, b.id)).map((row) => `${row.attempt}:${row.status}`),
+    ).toEqual(['1:STOPPED', '2:COMPLETED']);
+    expect((await next.nodeRunsOf(run.id, merge.id)).map((row) => row.status)).toEqual([
+      'COMPLETED',
+    ]);
+  });
+});
+
 describe('D-055 a partial drive totals the whole run', () => {
   it('after a retry, the run totals include the failed first attempt’s tokens', async () => {
     const h = await createRunDriverHarness();

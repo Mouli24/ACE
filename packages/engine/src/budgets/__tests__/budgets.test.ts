@@ -15,7 +15,13 @@ import {
 } from '../../guardrails/__tests__/fakes.js';
 import { createGuardrailEvaluator, type EvaluationTarget } from '../../guardrails/evaluator.js';
 import { LOCAL_SCOPE } from '../../ports/index.js';
-import { createBudgetService, projectedNodeCostUsd, utcDay, type BudgetService } from '../index.js';
+import {
+  createBudgetService,
+  projectedNodeCostUsd,
+  unpricedNodes,
+  utcDay,
+  type BudgetService,
+} from '../index.js';
 
 /**
  * FR-GRD-008 and §2.3: the three moments a budget is checked, and D80's `budgetHalt`.
@@ -202,6 +208,63 @@ describe('TC-GRD-012 Budget exceeded', () => {
   });
 });
 
+describe('[audit E-4, P-3] a cost cap over a model with no price', () => {
+  const PROVIDERS = [
+    { id: 'p-cloud', type: 'openai' as const },
+    { id: 'p-local', type: 'ollama' as const },
+    { id: 'p-claude', type: 'claude_code' as const },
+  ];
+  const withModel = (providerId: string, modelId: string): Node => {
+    const node = agentNode({ name: `${providerId}/${modelId}` });
+    return { ...node, config: { ...node.config, providerId, modelId } } as Node;
+  };
+
+  it('finds the nodes whose spend no cap can count', () => {
+    const nodes = [
+      withModel('p-cloud', 'unpriced'),
+      withModel('p-cloud', 'priced'),
+      withModel('p-local', 'llama'),
+      withModel('p-claude', 'sonnet'),
+    ];
+    const models = [
+      { providerId: 'p-cloud', modelId: 'unpriced' },
+      { providerId: 'p-cloud', modelId: 'priced', pricing: PRICING },
+      { providerId: 'p-local', modelId: 'llama' },
+      { providerId: 'p-claude', modelId: 'sonnet' },
+    ];
+
+    // Local is $0 by rule (D359) and Claude Code reports its own cost (D263): only the first.
+    expect(unpricedNodes(nodes, PROVIDERS, models)).toEqual([
+      { nodeId: nodes[0]!.id, nodeName: 'p-cloud/unpriced' },
+    ]);
+  });
+
+  it('warns at pre-flight when a cap is set, and the run still starts', async () => {
+    const { budgets, projectId } = harness(runCap(), { maxCostPerRunUsd: 0.5 });
+
+    const issues = await budgets.preflightIssues({
+      projectId,
+      policy: runCap(),
+      unpriced: [{ nodeId: id(), nodeName: 'Writer' }],
+    });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ severity: 'warning', code: 'unpriced_model_under_cap' });
+    expect(issues[0]?.message).toContain('"Writer"');
+    expect(issues[0]?.message).toContain('$0.5');
+  });
+
+  it('says nothing without a cap, or with one set to pass', async () => {
+    const unpriced = [{ nodeId: id(), nodeName: 'Writer' }];
+    const { budgets, projectId } = harness(null);
+
+    expect(await budgets.preflightIssues({ projectId, policy: null, unpriced })).toEqual([]);
+    expect(
+      await budgets.preflightIssues({ projectId, policy: runCap('pass', { usd: 1 }), unpriced }),
+    ).toEqual([]);
+  });
+});
+
 describe('FR-GRD-008 Daily budget', () => {
   const dailyPolicy = (action: 'block' | 'warn' | 'pass' = 'block'): GuardrailPolicy =>
     policy({ checks: [check({ point: 'cost', type: 'daily_budget', action })] });
@@ -300,6 +363,44 @@ describe('FR-GRD-008 Projection and the day boundary', () => {
     expect(projectedNodeCostUsd(node, PRICING)).toBeCloseTo(0.02, 6);
     // A local model with no published price projects to nothing rather than to a guess (round 2).
     expect(projectedNodeCostUsd(node, undefined)).toBe(0);
+  });
+
+  it('[audit E-4] projects the prompt too, at input prices', () => {
+    const { node } = harness(null, { maxTokens: 1_000 });
+    const priced: ModelPricing = { ...PRICING, inputPer1k: 0.005 };
+
+    // 1 000 output tokens at $0.01/1k, plus 2 000 prompt tokens at $0.005/1k.
+    expect(projectedNodeCostUsd(node, priced, 2_000)).toBeCloseTo(0.02, 6);
+    expect(projectedNodeCostUsd(node, priced)).toBeCloseTo(0.01, 6);
+  });
+
+  it('[audit E-4] counts the prompt and the calls already in flight against the cap', async () => {
+    const { budgets, target, projectId, node } = harness(runCap(), { maxCostPerRunUsd: 0.025 });
+    const priced: ModelPricing = { ...PRICING, inputPer1k: 0.005 };
+
+    // Alone, this call fits: $0.01 out + $0.01 in = $0.02 of a $0.025 cap.
+    const alone = await budgets.beforeDispatch({
+      target,
+      projectId,
+      totals: totals(0),
+      node,
+      pricing: priced,
+      inputTokens: 2_000,
+    });
+    expect(alone.halt).toBeUndefined();
+
+    // With another call's $0.01 still in flight, it does not.
+    const besideAnother = await budgets.beforeDispatch({
+      target,
+      projectId,
+      totals: totals(0),
+      node,
+      pricing: priced,
+      inputTokens: 2_000,
+      inFlightUsd: 0.01,
+    });
+    expect(besideAnother.halt).toMatchObject({ scope: 'run', capUsd: 0.025, projected: true });
+    expect(besideAnother.halt?.costUsd).toBeCloseTo(0.03, 6);
   });
 
   it('projects an input node at zero — it calls no model', () => {

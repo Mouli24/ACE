@@ -53,7 +53,16 @@ export interface ModelSummariserDeps {
   /** Told why the model summary was abandoned for truncation (never the prompt or a secret); a stop is not reported. */
   onFallback?: (reason: string) => void;
   pricingFor: (providerId: Id, modelId: string) => Promise<ModelPricing | undefined>;
+  /** [audit E-10] How long the model may take once it has its slot; default `SUMMARY_TIMEOUT_MS`. */
+  timeoutMs?: number;
 }
+
+/**
+ * [audit E-10] The summary call's own clock. It runs inside the delivery of a node that already
+ * COMPLETED, so a model that never answered held that hand-off — and the run — open for ever. Past
+ * it, the call is abandoned and the content truncated, as on any other failure.
+ */
+export const SUMMARY_TIMEOUT_MS = 60_000;
 
 /**
  * The error kind and code when the adapter classified it, else the error's name — never its message,
@@ -132,6 +141,9 @@ export function createModelSummariser(deps: ModelSummariserDeps): Summariser {
       try {
         generated = await deps.runGated(target.providerId, async () => {
           const adapter = await deps.adapterFor(target.providerId);
+          // [audit E-10] Started once the slot is held (D66), and cut by the run's stop as before.
+          const timeout = AbortSignal.timeout(deps.timeoutMs ?? SUMMARY_TIMEOUT_MS);
+          const callSignal = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
           let out = '';
           let tokensIn: number | undefined;
           let tokensOut: number | undefined;
@@ -144,15 +156,24 @@ export function createModelSummariser(deps: ModelSummariserDeps): Summariser {
               outputTypes: ['text'],
               maxTokens: targetTokens,
             },
-            signal ?? new AbortController().signal,
+            callSignal,
           );
-          for await (const chunk of stream) {
-            if (chunk.type === 'text') out += chunk.delta;
-            else if (chunk.type === 'usage') {
-              tokensIn = chunk.tokensIn;
-              tokensOut = chunk.tokensOut;
-            } else if (chunk.type === 'finish' && chunk.reason === 'error') failed = true;
-          }
+          const consumed = (async (): Promise<void> => {
+            for await (const chunk of stream) {
+              if (chunk.type === 'text') out += chunk.delta;
+              else if (chunk.type === 'usage') {
+                tokensIn = chunk.tokensIn;
+                tokensOut = chunk.tokensOut;
+              } else if (chunk.type === 'finish' && chunk.reason === 'error') failed = true;
+            }
+          })();
+          // An adapter that does not watch its signal is still let go of when the clock runs out.
+          const abandoned = new Promise<never>((_resolve, reject) => {
+            const quit = (): void => reject(callSignal.reason as Error);
+            if (callSignal.aborted) quit();
+            else callSignal.addEventListener('abort', quit, { once: true });
+          });
+          await Promise.race([consumed, abandoned]);
           if (failed || out.trim() === '') {
             throw new Error('The summarising model returned no summary.');
           }

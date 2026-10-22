@@ -48,6 +48,7 @@ import {
   GraphOpsRequestSchema,
   GraphOpsResponseSchema,
   HealthResponseSchema,
+  ImportWorkflowResponseSchema,
   ProjectSchema,
   SettingsPatchSchema,
   SettingsSchema,
@@ -91,6 +92,7 @@ import {
   type GraphOpsResponse,
   type HealthResponse,
   type Id,
+  type ImportWorkflowResponse,
   type Page,
   type Project,
   type Settings,
@@ -477,8 +479,9 @@ export function createAceClient(options: AceClientOptions) {
       request('POST', `/workflows/${id}/estimate`, WorkflowEstimateSchema),
     exportWorkflow: (id: Id): Promise<WorkflowExport> =>
       request('GET', `/workflows/${id}/export`, WorkflowExportSchema),
-    importWorkflow: (projectId: Id, file: WorkflowExport): Promise<WorkflowGraphResponse> =>
-      request('POST', `/projects/${projectId}/workflows/import`, WorkflowGraphResponseSchema, {
+    /** [audit S-1] With a `notice` when the import cleared commands or lowered access. */
+    importWorkflow: (projectId: Id, file: WorkflowExport): Promise<ImportWorkflowResponse> =>
+      request('POST', `/projects/${projectId}/workflows/import`, ImportWorkflowResponseSchema, {
         schema: WorkflowExportSchema,
         value: file,
       }),

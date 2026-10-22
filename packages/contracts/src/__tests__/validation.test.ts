@@ -7,6 +7,7 @@ import {
   ROUND_3_VALIDATION_ISSUE_CODES,
   ROUND_4_VALIDATION_ISSUE_CODES,
   AGENTIC_VALIDATION_ISSUE_CODES,
+  COST_VALIDATION_ISSUE_CODES,
   ROUND_5_VALIDATION_ISSUE_CODES,
   PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
   RUN_ORDER_VALIDATION_ISSUE_CODES,
@@ -137,6 +138,7 @@ describe('FR-WF-006 ValidationIssue', () => {
       ...PRODUCT_GAPS_VALIDATION_ISSUE_CODES,
       ...RUN_ORDER_VALIDATION_ISSUE_CODES,
       ...AGENTIC_VALIDATION_ISSUE_CODES,
+      ...COST_VALIDATION_ISSUE_CODES,
     ]);
   });
 
@@ -160,8 +162,15 @@ describe('FR-WF-006 ValidationIssue', () => {
       'model_cannot_use_tools',
       'project_folder_missing',
     ]);
-    expect(VALIDATION_ISSUE_CODES.slice(-2)).toEqual([...AGENTIC_VALIDATION_ISSUE_CODES]);
+    // [audit E-4] The cost warning's code comes after them.
+    expect(VALIDATION_ISSUE_CODES.slice(-3, -1)).toEqual([...AGENTIC_VALIDATION_ISSUE_CODES]);
     expect(ValidationIssueCodeSchema.safeParse('project_folder_missing').success).toBe(true);
+  });
+
+  it('[audit E-4, P-3] adds unpriced_model_under_cap, the warning a cost cap over an unpriced model gets', () => {
+    expect([...COST_VALIDATION_ISSUE_CODES]).toEqual(['unpriced_model_under_cap']);
+    expect(VALIDATION_ISSUE_CODES.slice(-1)).toEqual([...COST_VALIDATION_ISSUE_CODES]);
+    expect(ValidationIssueCodeSchema.safeParse('unpriced_model_under_cap').success).toBe(true);
   });
 
   it('adds the one code round 5 §2.4 names, and keeps not_supported_yet for later kinds', () => {

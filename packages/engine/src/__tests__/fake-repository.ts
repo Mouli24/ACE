@@ -63,6 +63,7 @@ import type {
   Repository,
   RunApprovalRequest,
   RunPatch,
+  RunStatusGuard,
   Scope,
   StoredApproval,
   StoredCheckpoint,
@@ -613,9 +614,11 @@ export class FakeRepository implements Repository {
             (run.status === 'BLOCKED' && run.blockedReason !== undefined),
         )
         .sort((a, b) => a.id.localeCompare(b.id)),
-    update: async (scope: Scope, id: Id, patch: RunPatch) => {
+    update: async (scope: Scope, id: Id, patch: RunPatch, guard?: RunStatusGuard) => {
       const current = this.#for(scope).runs.get(id);
       if (current === undefined) return null;
+      // [audit E-5] The compare-and-set: checked and written with no await between them.
+      if (guard !== undefined && !guard.ifStatus.includes(current.status)) return null;
 
       const next: Run = { ...current };
       if (patch.status !== undefined) next.status = patch.status;

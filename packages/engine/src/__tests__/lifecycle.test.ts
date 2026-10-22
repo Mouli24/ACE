@@ -1,4 +1,4 @@
-import type { NodeRun, Run } from '@ace/contracts';
+import { canContinueRun, type NodeRun, type Run } from '@ace/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createEventBus, type EventBus } from '../events/index.js';
@@ -152,6 +152,11 @@ describe('TC-SYS-009 stopping the engine halts what was still going', () => {
 
   it('keeps the totals the run had spent by then', async () => {
     await repository.runs.create(scope, run('01JBXQ8Z9KQ4R7N2VWXYZ0RN51', 'RUNNING'));
+    // TC-OBS-002: what a run spent is what its node runs spent [audit E-6].
+    await repository.nodeRuns.create(scope, {
+      ...nodeRun('01JBXQ8Z9KQ4R7N2VWXYZ0NRN1', '01JBXQ8Z9KQ4R7N2VWXYZ0RN51', 'COMPLETED'),
+      usage: { tokensIn: 3, tokensOut: 4, costUsd: 0.01 },
+    });
 
     await haltActiveRuns(deps);
 
@@ -182,5 +187,58 @@ describe('TC-SYS-009 stopping the engine halts what was still going', () => {
       'shutdown',
     );
     expect((await repository.runs.get(scope, '01JBXQ8Z9KQ4R7N2VWXYZ0RN52'))?.haltReason).toBe('crash');
+  });
+});
+
+describe('[audit E-6] a halted run reads as halted, and what it held can be continued', () => {
+  const RUN = '01JBXQ8Z9KQ4R7N2VWXYZ0RN51';
+
+  it('a crash halt writes the HALTED controls and the summed totals onto the row and the event', async () => {
+    await repository.runs.create(scope, {
+      ...run(RUN, 'PAUSED'),
+      allowedActions: ['resume', 'stop'],
+      totals: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+    });
+    await repository.nodeRuns.create(scope, {
+      ...nodeRun('01JBXQ8Z9KQ4R7N2VWXYZ0NRN1', RUN, 'COMPLETED'),
+      usage: { tokensIn: 10, tokensOut: 20, costUsd: 0.02 },
+    });
+    await repository.nodeRuns.create(scope, {
+      ...nodeRun('01JBXQ8Z9KQ4R7N2VWXYZ0NRN2', RUN, 'RUNNING'),
+      usage: { tokensIn: 5, tokensOut: 1, costUsd: 0.005 },
+    });
+
+    await recoverAfterCrash(deps);
+
+    const stored = await repository.runs.get(scope, RUN);
+    expect(stored?.allowedActions).toEqual(['restart']);
+    expect(stored?.totals).toMatchObject({ tokensIn: 15, tokensOut: 21 });
+    expect(stored?.totals.costUsd).toBeCloseTo(0.025, 10);
+    const completed = events.find((event) => event.type === 'run.completed');
+    expect(completed?.payload).toMatchObject({ totals: { tokensIn: 15, tokensOut: 21 } });
+  });
+
+  it('a shutdown halt writes them too', async () => {
+    await repository.runs.create(scope, {
+      ...run(RUN, 'RUNNING'),
+      allowedActions: ['pause', 'stop'],
+    });
+
+    await haltActiveRuns(deps);
+
+    expect((await repository.runs.get(scope, RUN))?.allowedActions).toEqual(['restart']);
+  });
+
+  it('a PAUSED node run is STOPPED by the crash halt, so Continue (D388) runs it again', async () => {
+    await repository.runs.create(scope, run(RUN, 'PAUSED'));
+    await repository.nodeRuns.create(scope, nodeRun('01JBXQ8Z9KQ4R7N2VWXYZ0NRN1', RUN, 'PAUSED'));
+
+    const result = await recoverAfterCrash(deps);
+
+    expect(result.nodeRuns).toEqual(['01JBXQ8Z9KQ4R7N2VWXYZ0NRN1']);
+    const rows = await repository.nodeRuns.listByRun(scope, RUN);
+    expect(rows.map((row) => row.status)).toEqual(['STOPPED']);
+    const halted = await repository.runs.get(scope, RUN);
+    expect(canContinueRun(halted!, rows)).toBe(true);
   });
 });

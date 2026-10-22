@@ -220,6 +220,18 @@ describe('FR-SYS-005 settings repository', () => {
     expect(settings.concurrency).toBe(5);
     expect(settings.theme).toBe('dark');
   });
+
+  it('[audit U-4] clears an optional setting the patch names as undefined', async () => {
+    const lastProjectId = '01JBXQ8Z9KQ4R7N2VWXYZ0PRJC';
+    await db.repository.settings.update(scope, { lastProjectId });
+    expect((await db.repository.settings.get(scope)).lastProjectId).toBe(lastProjectId);
+
+    await db.repository.settings.update(scope, { lastProjectId: undefined });
+
+    const settings = await db.repository.settings.get(scope);
+    expect(settings.lastProjectId).toBeUndefined();
+    expect(settings.theme).toBe('dark');
+  });
 });
 
 describe('TC-NFR-006 Atomic writes', () => {

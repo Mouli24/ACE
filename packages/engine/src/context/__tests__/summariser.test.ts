@@ -47,6 +47,7 @@ function setup(
     pricing?: ModelPricing;
     putFails?: boolean;
     stream?: ProviderAdapter['generate'];
+    timeoutMs?: number;
   } = {},
 ): Setup {
   const requests: GenerateRequest[] = [];
@@ -92,12 +93,52 @@ function setup(
     now: () => '2026-10-01T00:00:00.000Z',
     fallback: createTruncatingSummariser(),
     pricingFor: async () => options.pricing,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
   });
   return { requests, signals, cache: repository.summaryCache, summariser, reasons };
 }
 
 const summaryCalls = (s: Setup): GenerateRequest[] =>
   s.requests.filter((r) => r.system?.includes(SUMMARY_PROMPT_VERSION));
+
+describe('[audit E-10] a summary that never comes', () => {
+  it('is abandoned when its clock runs out, and the content is truncated to fit', async () => {
+    // A model that never answers and does not even watch its signal.
+    const s = setup({
+      timeoutMs: 20,
+      stream: async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: 'finish', reason: 'stop' } as StreamChunk;
+      },
+    });
+    const parts = [text(words(2000))];
+
+    const out = await s.summariser.summarise({ parts, budgetTokens: 200, target: TARGET });
+
+    expect(estimatePartsTokens(out.parts)).toBeLessThanOrEqual(200);
+    expect(out.usage).toBeUndefined();
+    expect(s.reasons).toHaveLength(1);
+    expect(s.reasons[0]).toContain('model summary failed');
+  });
+
+  it('hands the model a signal of its own that aborts when the clock runs out', async () => {
+    const s = setup({ timeoutMs: 20 });
+    const run = new AbortController();
+
+    await s.summariser.summarise({
+      parts: [text(words(2000))],
+      budgetTokens: 200,
+      target: TARGET,
+      signal: run.signal,
+    });
+
+    const [handed] = s.signals;
+    expect(handed).toBeDefined();
+    expect(handed).not.toBe(run.signal);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(handed?.aborted).toBe(true);
+  });
+});
 
 describe('model summariser', () => {
   it('leaves content under budget unchanged, with no call', async () => {
@@ -241,7 +282,11 @@ describe('model summariser', () => {
       target: TARGET,
       signal: controller.signal,
     });
-    expect(s.signals[0]).toBe(controller.signal);
+    // [audit E-10] The provider's signal is the run's joined with the summary's own clock, so a
+    // stop of the run still reaches it.
+    expect(s.signals[0]?.aborted).toBe(false);
+    controller.abort();
+    expect(s.signals[0]?.aborted).toBe(true);
 
     const aborted = setup();
     const gone = new AbortController();

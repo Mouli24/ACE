@@ -17,3 +17,6 @@ data/
 
 # the acceptance harness writes the engine's address and token here at run time
 .playwright-engine.json
+
+# a project created without a folder used to land under the working directory [audit E-8]
+ace-projects/

@@ -1,4 +1,5 @@
 import { mkdirSync, statSync, accessSync, constants, writeFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -18,6 +19,8 @@ import {
   type GraphOp,
   type GraphOpsResponse,
   type Id,
+  type ImportNotice,
+  type ImportWorkflowResponse,
   type Node,
   type Page,
   type Port,
@@ -61,6 +64,13 @@ export interface GraphServiceDeps {
    * servers). Absent, validation raises neither — a round 1–3 harness builds the service without it.
    */
   tools?: ToolLookup;
+  /**
+   * Where a project created without a folder gets one: `<projectsRoot>/<projectId>` [audit E-8].
+   * The server passes `<dataDir>/projects`. Absent (a test harness), it is a folder under the OS
+   * temp directory — never the process's working directory, which used to scatter project folders
+   * across whichever checkout or package the engine happened to start from.
+   */
+  projectsRoot?: string;
 }
 
 export interface GraphService {
@@ -97,7 +107,8 @@ export interface GraphService {
   applyGraphOps(workflowId: Id, request: unknown): Promise<GraphOpsResponse>;
   validateWorkflow(id: Id): Promise<ValidationIssue[]>;
   exportWorkflow(id: Id): Promise<WorkflowExport>;
-  importWorkflow(projectId: Id, raw: unknown): Promise<WorkflowGraphResponse>;
+  /** [audit S-1] With a `notice` when the import cleared commands or lowered workspace access. */
+  importWorkflow(projectId: Id, raw: unknown): Promise<ImportWorkflowResponse>;
 }
 
 /**
@@ -136,6 +147,7 @@ function ensureWritableFolder(folderPath: string): void {
 export function createGraphService(deps: GraphServiceDeps): GraphService {
   const { repository, scope } = deps;
   const now = deps.now ?? (() => new Date().toISOString());
+  const projectsRoot = deps.projectsRoot ?? join(tmpdir(), 'ace-projects');
 
   async function requireWorkflow(id: Id): Promise<Workflow> {
     const workflow = await repository.workflows.get(scope, id);
@@ -155,7 +167,9 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
 
     async createProject({ name, folderPath }) {
       const id = newId();
-      const resolved = folderPath ?? join(process.cwd(), 'ace-projects', id);
+      // [audit E-8] A project that already exists keeps the folder it stored; only a new one without
+      // a folder of its own lands under `projectsRoot`.
+      const resolved = folderPath ?? join(projectsRoot, id);
       ensureWritableFolder(resolved);
 
       const timestamp = now();
@@ -200,6 +214,12 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
 
     async deleteProject(id) {
       if (!(await repository.projects.delete(scope, id))) throw notFound(`Project ${id}`);
+      // [audit U-4] FR-PRJ-004 reopens the last project at launch; a deleted one is forgotten, or
+      // "/" keeps sending the person to a project that is gone. `undefined` overwrites the stored
+      // id in the settings patch, which is how both stores clear an optional setting.
+      if ((await repository.settings.get(scope)).lastProjectId === id) {
+        await repository.settings.update(scope, { lastProjectId: undefined });
+      }
     },
 
     /** FR-PRJ-004: opening a project is what makes it the one reopened next launch. */
@@ -385,13 +405,85 @@ export function createGraphService(deps: GraphServiceDeps): GraphService {
         updatedAt: timestamp,
       };
       const remapped = remapGraph(parsed.nodes, parsed.edges, workflow.id);
+      const { nodes, notice } = withoutImportedTrust(remapped.nodes);
 
       return repository.transaction(async (tx) => {
         await tx.workflows.create(scope, workflow);
-        for (const node of remapped.nodes) await tx.nodes.insert(scope, node);
+        for (const node of nodes) await tx.nodes.insert(scope, node);
         for (const edge of remapped.edges) await tx.edges.insert(scope, edge);
-        return { workflow, nodes: remapped.nodes, edges: remapped.edges };
+        return {
+          workflow,
+          nodes,
+          edges: remapped.edges,
+          ...(notice === undefined ? {} : { notice }),
+        };
       });
+    },
+  };
+}
+
+/**
+ * [audit S-1] A workflow file is someone else's until the person says otherwise. Its nodes came in
+ * with their workspace access and allow-listed commands, and a run seeds its allowlist from them
+ * (D376), so importing a file and pressing Run executed its commands with no approval card. On
+ * import, every node's allow-listed commands are cleared and access above `edit_files` is lowered
+ * to it: each command asks again, and running commands at all is the person's choice to make back.
+ * The web domains a node may fetch from are kept — they only widen what a tool may read — and
+ * listed in the notice for the person to look over.
+ */
+function withoutImportedTrust(nodes: readonly Node[]): { nodes: Node[]; notice?: ImportNotice } {
+  const commandsCleared: Id[] = [];
+  const accessLowered: Id[] = [];
+  const domains = new Set<string>();
+
+  const kept = nodes.map((node): Node => {
+    if (node.kind !== 'agent') return node;
+    for (const domain of node.config.tools.allowedDomains) domains.add(domain);
+    const workspace = node.config.workspace;
+    if (workspace === undefined) return node;
+    const lower = workspace.access === 'edit_commands';
+    const clear = workspace.allowedCommands.length > 0;
+    if (!lower && !clear) return node;
+    if (clear) commandsCleared.push(node.id);
+    if (lower) accessLowered.push(node.id);
+    return {
+      ...node,
+      config: {
+        ...node.config,
+        workspace: {
+          ...workspace,
+          access: lower ? 'edit_files' : workspace.access,
+          allowedCommands: [],
+        },
+      },
+    };
+  });
+
+  if (commandsCleared.length === 0 && accessLowered.length === 0 && domains.size === 0) {
+    return { nodes: kept };
+  }
+  const nodesWord = (count: number): string => (count === 1 ? '1 node' : `${count} nodes`);
+  const said: string[] = [];
+  if (commandsCleared.length > 0) {
+    said.push(`Cleared the allowed commands of ${nodesWord(commandsCleared.length)}.`);
+  }
+  if (accessLowered.length > 0) {
+    said.push(
+      `${nodesWord(accessLowered.length)} can edit files but no longer run commands — turn that back on in the node if you trust this workflow.`,
+    );
+  }
+  if (domains.size > 0) {
+    said.push(
+      `Its nodes may fetch from ${[...domains].join(', ')} — check these before you run it.`,
+    );
+  }
+  return {
+    nodes: kept,
+    notice: {
+      message: said.join(' '),
+      commandsCleared,
+      accessLowered,
+      allowedDomains: [...domains],
     },
   };
 }

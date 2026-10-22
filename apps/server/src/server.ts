@@ -61,6 +61,7 @@ import {
   createWorkspaceService,
   createWsHub,
   guardrailStoreFor,
+  HttpError,
   haltActiveRuns,
   isHostAllowed,
   isOriginAllowed,
@@ -120,6 +121,7 @@ import {
 import {
   CannedSearchBackend,
   McpManager,
+  ToolError,
   ToolRegistry,
   cannedResultsAt,
   classifyCommand,
@@ -136,6 +138,7 @@ import { WebSocketServer } from 'ws';
 
 import { migrateFullAutoProviders } from './full-auto-migration.js';
 import { createPricingLoader } from './pricing.js';
+import { settingsSearchBackend } from './search-backend.js';
 
 export const ENGINE_VERSION = '0.1.0';
 
@@ -707,20 +710,25 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
 
   /*
    * The tool registry: the thirteen built-ins (§2.2's six, then X1's seven), plus whatever MCP
-   * servers connect. The built-ins default to the child-process sandbox (D13) and the canned search
-   * backend (D14), so this needs no Docker and no network. The MCP manager registers a connected server's tools into
+   * servers connect. The built-ins default to the child-process sandbox (D13) and, until Settings
+   * name a SearXNG, the canned search backend (D14), so this needs no Docker and no network. The MCP manager registers a connected server's tools into
    * the same registry, and `DELETE /mcp-servers/:id` drops them again (FR-TOOL-007).
    */
   const toolRegistry = new ToolRegistry();
-  registerBuiltinTools(
-    toolRegistry,
-    options.cannedSearchBaseUrl === undefined
-      ? {}
-      : {
-          searchBackend: new CannedSearchBackend({}, cannedResultsAt(options.cannedSearchBaseUrl)),
-        },
-  );
+  registerBuiltinTools(toolRegistry, {
+    // [audit U-3] SearXNG once Settings name one (D14, D-084), read at each search; the canned
+    // index otherwise. It used to be the canned index always, whatever Settings said.
+    searchBackend: settingsSearchBackend(
+      async () => (await repository.settings.get(LOCAL_SCOPE)).searxngUrl,
+      options.cannedSearchBaseUrl === undefined
+        ? new CannedSearchBackend()
+        : new CannedSearchBackend({}, cannedResultsAt(options.cannedSearchBaseUrl)),
+    ),
+  });
   const mcpManager = new McpManager({ registry: toolRegistry });
+  /** [audit U-3] D16: whether MCP servers may be used at all, read when it matters. */
+  const mcpEnabled = async (): Promise<boolean> =>
+    (await repository.settings.get(LOCAL_SCOPE)).mcpEnabled;
   const toolLogger = logger.child({ subsystem: 'tools' });
 
   /*
@@ -789,8 +797,16 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
       if (registered === undefined) return undefined;
       return {
         definition: registered.definition,
-        run: (args, ctx) =>
-          registered.implementation(args, {
+        run: async (args, ctx) => {
+          // [audit U-3] A server connected before MCP was turned off in Settings is not called.
+          if (registered.definition.source === 'mcp' && !(await mcpEnabled())) {
+            throw new ToolError(
+              'unavailable',
+              name,
+              'MCP is turned off in Settings, so this MCP tool cannot run.',
+            );
+          }
+          return registered.implementation(args, {
             scope: LOCAL_SCOPE,
             runId: ctx.runId,
             sandboxDir: ctx.sandboxDir,
@@ -801,7 +817,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
             ...(ctx.allowedDomains === undefined ? {} : { allowedDomains: ctx.allowedDomains }),
             logger: toolLogger,
             signal: ctx.signal,
-          }),
+          });
+        },
       };
     },
   };
@@ -1106,6 +1123,16 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     list: () => repository.mcpServers.list(LOCAL_SCOPE),
     get: (id) => repository.mcpServers.get(LOCAL_SCOPE, id),
     async create(request) {
+      // [audit U-3] D16: with MCP off in Settings no server is connected — not even to try it.
+      if (!(await mcpEnabled())) {
+        throw new HttpError(
+          'invalid_config',
+          'validation_failed',
+          'MCP is turned off in Settings. Turn it on to add an MCP server.',
+          { setting: 'mcpEnabled' },
+          false,
+        );
+      }
       const id = newId();
       const server = await mcpManager.register(id, request);
       const created = await repository.mcpServers.create(LOCAL_SCOPE, server);
@@ -1208,6 +1235,9 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     },
     // Round 4 §2.4 (D-069): validation checks every agent's enabled tools against the live registry.
     tools: toolProvider,
+    // [audit E-8] A project created without a folder gets `<dataDir>/projects/<id>`, not a folder
+    // under whatever directory the engine was started from.
+    projectsRoot: join(config.dataDir, 'projects'),
   });
 
   /*
@@ -1448,6 +1478,8 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
         bus,
         logger: logger.child({ subsystem: 'runs' }),
         approvals,
+        // [audit E-7] D323: a run started from Domain stays open across a restart, clean or not.
+        keepOpen: (run) => run.domain?.stayOpen === true,
       });
 
       // Round 4: stop deriving timeline rows and close every MCP connection before the DB closes.

@@ -5,6 +5,7 @@ import {
   CheckCommandSchema,
   EdgeSchema,
   EntityNameSchema,
+  IdSchema,
   NodeSchema,
   TerminalTrustSchema,
   WorkflowSchema,
@@ -100,6 +101,30 @@ export const WorkflowGraphResponseSchema = z.object({
   edges: z.array(EdgeSchema),
 });
 export type WorkflowGraphResponse = z.infer<typeof WorkflowGraphResponseSchema>;
+
+/**
+ * [audit S-1] What importing a workflow changed so a file from elsewhere cannot run commands without
+ * asking: allow-listed commands are cleared, and workspace access above `edit_files` is lowered to
+ * it. The web domains a node may fetch from are kept, and listed for the person to look over. Node
+ * ids are the imported workflow's. Only in the answer — nothing of it is stored.
+ */
+export const ImportNoticeSchema = z.object({
+  /** One or two sentences, ready for a toast. */
+  message: z.string(),
+  /** Nodes whose allow-listed commands were cleared. */
+  commandsCleared: z.array(IdSchema),
+  /** Nodes whose workspace access was lowered to `edit_files`. */
+  accessLowered: z.array(IdSchema),
+  /** Every domain an imported node may fetch from, kept as the file had it. */
+  allowedDomains: z.array(z.string()),
+});
+export type ImportNotice = z.infer<typeof ImportNoticeSchema>;
+
+/** `POST /projects/:id/workflows/import`: the graph, with a `notice` when the import changed it. */
+export const ImportWorkflowResponseSchema = WorkflowGraphResponseSchema.extend({
+  notice: ImportNoticeSchema.optional(),
+});
+export type ImportWorkflowResponse = z.infer<typeof ImportWorkflowResponseSchema>;
 
 export const ValidateWorkflowResponseSchema = z.object({
   issues: z.array(ValidationIssueSchema),
