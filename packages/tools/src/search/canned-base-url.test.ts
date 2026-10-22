@@ -73,6 +73,9 @@ describe('TC-TOOL-003 search → fetch works offline when the index points at a 
         runId: 'run',
         sandboxDir: '/nowhere',
         logger: new RecordingToolLogger(),
+        // a loopback page is reachable only through an allowlist entry that is itself the IP
+        // [audit S-2]
+        allowedDomains: ['127.0.0.1'],
       },
     );
     expect(fetched).toEqual({ title: 'Local page', text: 'Offline words.' });
