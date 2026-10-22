@@ -21,7 +21,7 @@ import {
 
 import { useProject } from '../../projects/hooks';
 import { askAgentAboutFile } from '../ask-agent';
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import type { AgentLook } from '../../theme/agents';
 import { useChangesStore } from '../changes/changes-store';
 import { usePendingChanges } from '../changes/hooks';
@@ -489,11 +489,7 @@ export function FileTree({
             data-glyph={folder ? (isOpen ? '▾' : '▸') : ''}
             className="w-[9px] shrink-0 text-[9px] text-[var(--muted)] after:content-[attr(data-glyph)]"
           />
-          <span
-            aria-hidden
-            className={cn('h-[8px] w-[8px] shrink-0', folder ? 'rounded-[2px]' : 'rounded-full')}
-            style={{ background: folder ? 'var(--iconLine)' : fileIconColor(path) }}
-          />
+          <FileIcon path={path} folder={folder} open={isOpen} />
           <span
             className="min-w-0 flex-1 truncate"
             style={tone ? { color: TONE_COLOR[tone] } : undefined}

@@ -9,7 +9,7 @@ import {
 } from '@ace/ui';
 import { useRef, type KeyboardEvent } from 'react';
 
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { useProjectReviews, useReviewStore } from '../changes/review-store';
 import { nameOf, parentOf } from '../files/paths';
 import { useCloseRequest } from './CloseDialogs';
@@ -99,11 +99,7 @@ export function TabsBar({ projectId }: { projectId: string }) {
                     close([path]);
                   }}
                 >
-                  <span
-                    aria-hidden
-                    className="h-[7px] w-[7px] shrink-0 rounded-full"
-                    style={{ background: fileIconColor(path) }}
-                  />
+                  <FileIcon path={path} />
                   {nameOf(path)}
                   {(nameCount.get(nameOf(path)) ?? 0) > 1 && (
                     <span className="text-[var(--muted)]">
@@ -182,11 +178,7 @@ export function TabsBar({ projectId }: { projectId: string }) {
                 closeReview();
               }}
             >
-              <span
-                aria-hidden
-                className="h-[7px] w-[7px] shrink-0 rounded-full"
-                style={{ background: fileIconColor(review.path) }}
-              />
+              <FileIcon path={review.path} />
               {label}
             </div>
             <button

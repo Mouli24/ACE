@@ -2,7 +2,7 @@ import type { Checkpoint, CheckpointFile } from '@ace/contracts';
 import { cn } from '@ace/ui';
 import { useState } from 'react';
 
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { TONE_COLOR } from '../explorer/decorations';
 import { nameOf, parentOf } from '../files/paths';
 import { useCheckpointConflicts } from './changes-store';
@@ -60,11 +60,7 @@ export function CheckpointFiles({ checkpoint, onReview, onAction, busy }: Checkp
             className="flex flex-col border-t border-[var(--line)] py-[3px] first:border-t-0"
           >
             <div className="flex min-h-[24px] items-center gap-[6px] text-[12px]">
-              <span
-                aria-hidden
-                className="h-[6px] w-[6px] shrink-0 rounded-full"
-                style={{ background: fileIconColor(file.path) }}
-              />
+              <FileIcon path={file.path} size={14} />
               <button
                 type="button"
                 aria-label={`Review ${file.path}`}

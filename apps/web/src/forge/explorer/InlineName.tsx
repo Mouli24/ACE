@@ -1,7 +1,7 @@
-import { cn } from '@ace/ui';
+
 import { useEffect, useRef, useState } from 'react';
 
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 
 /** Where a row's name starts: its indent, then the caret column (9 + 7) and the mark (8 + 7). */
 const nameOffset = (depth: number): number => 8 + depth * 14 + 31;
@@ -73,11 +73,7 @@ export function InlineName({
         style={{ paddingLeft: 8 + depth * 14 }}
       >
         <span aria-hidden className="w-[9px] shrink-0" />
-        <span
-          aria-hidden
-          className={cn('h-[8px] w-[8px] shrink-0', folder ? 'rounded-[2px]' : 'rounded-full')}
-          style={{ background: folder ? 'var(--iconLine)' : fileIconColor(value) }}
-        />
+        <FileIcon path={value} folder={folder} />
         <input
           ref={input}
           aria-label={label}

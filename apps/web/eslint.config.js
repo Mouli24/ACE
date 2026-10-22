@@ -5,7 +5,7 @@ export default [
   { ignores: ['public/**', 'playwright-report/**', 'test-results/**', 'dist/**'] },
   {
     // Tooling that runs in Node, not in the browser bundle.
-    files: ['*.config.ts', 'e2e/**/*.ts'],
+    files: ['*.config.ts', 'vite-material-icons.ts', 'e2e/**/*.ts'],
     rules: { 'no-restricted-imports': 'off' },
   },
 ];

@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../app/api';
 import { useLayoutStore } from '../../app/stores/layout';
 import { useProject } from '../../projects/hooks';
-import { fileIconColor } from '../../theme/constants';
+import { FileIcon } from '../icons/FileIcon';
 import { ago } from '../../theme/format';
 import { openFile } from '../editor/actions';
 import { useEditorStore } from '../editor/editor-store';
@@ -91,11 +91,7 @@ function ProblemGroups({
       {[...groups].map(([path, list]) => (
         <section key={path} aria-label={path} className="flex flex-col gap-[6px]">
           <div className="flex min-w-0 items-center gap-[7px] text-[12.5px]">
-            <span
-              aria-hidden
-              className="h-[8px] w-[8px] shrink-0 rounded-full"
-              style={{ background: fileIconColor(path) }}
-            />
+            <FileIcon path={path} />
             <span className="shrink-0 font-semibold text-[var(--ink)]">{nameOf(path)}</span>
             <span className="min-w-0 truncate font-machine text-[10px] text-[var(--muted)]">
               {parentOf(path)}

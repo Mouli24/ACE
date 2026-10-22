@@ -188,12 +188,6 @@ export const PAL_D = {
 export const BAND_L = '#f7f3ef';
 export const BAND_D = '#201e1c';
 
-/** A file's icon colour, by extension. */
-export const fileIconColor = (path: string): string =>
-  (({ ts: '#1f97a3', md: '#ef6b3f', json: '#f2c14e' }) as Record<string, string>)[
-    path.split('.').pop() ?? ''
-  ] ?? 'var(--iconLine)';
-
 /** Agent colours, assigned by agent order. */
 export const AGENT_COLORS = ['#ef6b3f', '#7a62d6', '#1f97a3'] as const;
 export const agentColor = (index: number): string =>
