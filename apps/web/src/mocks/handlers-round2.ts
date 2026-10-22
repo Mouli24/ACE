@@ -98,9 +98,6 @@ let pace: StreamPace = 'normal';
 export function setStreamPace(next: StreamPace): void {
   pace = next;
 }
-export function currentStreamPace(): StreamPace {
-  return pace;
-}
 
 /** Cancels every scenario still playing, so tests never leak into one another. */
 export function stopScenario(): void {

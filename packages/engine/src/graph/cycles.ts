@@ -66,7 +66,3 @@ export function findCycle(edges: readonly Edge[]): Id[] | null {
 
   return null;
 }
-
-export function hasCycle(edges: readonly Edge[]): boolean {
-  return findCycle(edges) !== null;
-}

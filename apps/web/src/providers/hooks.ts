@@ -1,6 +1,5 @@
 import type {
   Id,
-  Model,
   ModelCapabilitiesPatch,
   ModelQuery,
   Provider,
@@ -139,17 +138,6 @@ export function useNodeNames(nodeIds: readonly Id[]) {
       return names;
     },
   });
-}
-
-/** Group a catalog by provider id, so a table can show provider names beside their models. */
-export function modelsByProvider(models: Model[]): Map<Id, Model[]> {
-  const grouped = new Map<Id, Model[]>();
-  for (const model of models) {
-    const list = grouped.get(model.providerId);
-    if (list) list.push(model);
-    else grouped.set(model.providerId, [model]);
-  }
-  return grouped;
 }
 
 /**

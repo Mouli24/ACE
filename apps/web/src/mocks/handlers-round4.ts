@@ -180,9 +180,6 @@ let chatScenario: ChatScenario = 'chat-stream';
 export function setChatScenario(next: ChatScenario): void {
   chatScenario = next;
 }
-export function currentChatScenario(): ChatScenario {
-  return chatScenario;
-}
 
 /**
  * Make the next chat input refuse (or stop refusing) regardless of its text — the toggle a test

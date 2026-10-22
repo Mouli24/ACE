@@ -57,12 +57,6 @@ export function useFollowNode(where?: {
   );
 }
 
-/** The node in focus as the URL has it (`?node=`), or none. */
-export function useFocusedNodeParam(): string | undefined {
-  const [search] = useSearchParams();
-  return search.get('node') ?? undefined;
-}
-
 /**
  * Keep `?node=` and the selection store's focused node in step (PG-3.4). The URL wins on arrival
  * and whenever it changes (a link, a mode switch, Domain's lens): the store follows it. In Ideate,

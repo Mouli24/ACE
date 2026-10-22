@@ -15,7 +15,6 @@ import {
   type Envelope,
   type GuardrailPolicy,
   type Id,
-  type Model,
   type Node,
   type NodeError,
   type NodeRun,
@@ -4091,14 +4090,3 @@ export function createRunService(deps: RunServiceDeps): RunService {
   return service;
 }
 
-/** Catalog rows as the router wants them — exported for the composition root. */
-export function toRouterModels(models: readonly Model[]) {
-  return models.map((model) => ({
-    providerId: model.providerId,
-    modelId: model.modelId,
-    available: model.available,
-    inputTypes: model.inputTypes,
-    outputTypes: model.outputTypes,
-    ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
-  }));
-}

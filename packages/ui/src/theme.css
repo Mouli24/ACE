@@ -103,9 +103,6 @@
   --edgeGlow: 0.08;
 
   --color-minimap-mask: rgba(244, 240, 236, 0.7);
-  --ace-glow-k: 0.5;
-  --ace-hi: #ffffffcc;
-  --ace-ground: 0 6px 18px -10px #1b1a1e40;
   --color-chart-1: #e8572e;
   --color-chart-2: #7a62d6;
   --color-chart-3: #1f97a3;
@@ -165,9 +162,6 @@
   --edgeGlow: 0.18;
 
   --color-minimap-mask: rgba(13, 12, 11, 0.7);
-  --ace-glow-k: 1;
-  --ace-hi: #ffffff10;
-  --ace-ground: 0 8px 24px -12px #000000cc;
   --danger-ink: #ef7a5a;
   --accent-ink: #f08a5d;
   --accent-strong: #c2410c;
@@ -214,8 +208,6 @@
   --surface: #fff;
   --soft: rgba(255, 255, 255, 0.7);
   --hover: #f3efeb;
-  --btn: #1f1d1b;
-  --btnInk: #fff;
   --dot: rgba(80, 80, 90, 0.18);
   --glow: rgba(239, 107, 63, 0.1);
   --ring6: rgba(255, 255, 255, 0.55);
@@ -232,8 +224,6 @@
   --surface: #1d1b1a;
   --soft: rgba(255, 255, 255, 0.05);
   --hover: #2a2725;
-  --btn: #f2eee9;
-  --btnInk: #1a1817;
   --dot: rgba(255, 255, 255, 0.08);
   --glow: rgba(239, 107, 63, 0.16);
   --ring6: rgba(255, 255, 255, 0.03);
@@ -423,11 +413,6 @@
   animation: flow 1.2s linear infinite;
 }
 
-@keyframes ace-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @keyframes ace-pulse {
   0%,
   100% {
@@ -437,17 +422,13 @@
     opacity: 0.35;
   }
 }
-.ace-spin {
-  animation: ace-spin 0.9s linear infinite;
-}
 .ace-pulse {
   animation: ace-pulse 1.2s ease-in-out infinite;
 }
 
-/* Reduced motion keeps the dashes, the spinner and the pulse still (NFR-USE-02). */
+/* Reduced motion keeps the dashes and the pulse still (NFR-USE-02). */
 @media (prefers-reduced-motion: reduce) {
   .ace-edge-flow,
-  .ace-spin,
   .ace-pulse {
     animation: none;
   }

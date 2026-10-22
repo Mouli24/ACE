@@ -15,7 +15,6 @@ export const aliases = {
   '@ace/sdk': here('../../packages/sdk/src/index.ts'),
   '@ace/ui/theme.css': here('../../packages/ui/src/theme.css'),
   '@ace/ui': here('../../packages/ui/src/index.ts'),
-  '@': here('./src'),
 };
 
 export default defineConfig({

@@ -1,4 +1,4 @@
-import type { CreateMcpServerRequest, Id, McpServer, ToolDefinition } from '@ace/contracts';
+import type { CreateMcpServerRequest, Id, McpServer } from '@ace/contracts';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
@@ -78,15 +78,4 @@ export function useMcpStatusSubscription(): void {
     if (!socket) return;
     return socket.on('mcp.status', () => invalidateToolsAndServers(queryClient));
   }, [queryClient]);
-}
-
-/** Group the registry by source so the table can show built-ins first, then each MCP server's. */
-export function toolsBySource(tools: ToolDefinition[]): {
-  builtin: ToolDefinition[];
-  mcp: ToolDefinition[];
-} {
-  return {
-    builtin: tools.filter((tool) => tool.source === 'builtin'),
-    mcp: tools.filter((tool) => tool.source === 'mcp'),
-  };
 }
