@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { NodeKind } from './enums.js';
 import {
+  DebateConfigSchema,
   EdgeSchema,
   IdSchema,
   LoopConfigSchema,
@@ -99,7 +100,14 @@ export const NodePatchSchema = z.object({
 });
 export type NodePatch = z.infer<typeof NodePatchSchema>;
 
-export const EdgePatchSchema = z.object({ loop: LoopConfigSchema.optional() });
+/**
+ * What `update_edge` can change: a loop edge's config, and (D405) whether a data edge debates —
+ * `debate: null` turns it back into a plain connection.
+ */
+export const EdgePatchSchema = z.object({
+  loop: LoopConfigSchema.optional(),
+  debate: DebateConfigSchema.nullable().optional(),
+});
 export type EdgePatch = z.infer<typeof EdgePatchSchema>;
 
 /** The seven graph operations of §2.6. Ports are re-derived server-side after `update_node`. */

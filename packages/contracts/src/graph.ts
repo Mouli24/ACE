@@ -203,6 +203,15 @@ export const newAgentWorkspace = (): AgentWorkspace => ({
   allowedCommands: [],
 });
 
+/**
+ * Which side of a debate a node takes. The Defender writes the answer and keeps it right, the
+ * Attacker looks for what is wrong with it, and the Judge, who took no part, decides and writes the
+ * final answer. On a preset node (D406) the role is set; any other node takes the side its place on
+ * the debate edge gives it.
+ */
+export const DEBATE_ROLES = ['defender', 'attacker', 'judge'] as const;
+export type DebateRole = (typeof DEBATE_ROLES)[number];
+
 export const AgentConfigSchema = z.object({
   providerId: IdSchema.optional(),
   modelId: z.string().optional(),
@@ -240,6 +249,11 @@ export const AgentConfigSchema = z.object({
   brain: z.boolean().optional(),
   /** Workspace access (agentic nodes Phase 2). Absent means Off: the node behaves as it always did. */
   workspace: AgentWorkspaceSchema.optional(),
+  /**
+   * D406: a preset debater — Defender, Attacker or Judge. Its debate prompt is the engine's and is
+   * never sent to the client; `instructions` is what the person adds on top.
+   */
+  role: z.enum(DEBATE_ROLES).optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 
@@ -497,6 +511,25 @@ export const DottedPathSchema = z
   .string()
   .regex(DOTTED_PATH_REGEX, 'must be a dotted path such as verdict or review.issues.0');
 
+export const DEBATE_ROUNDS_MAX = 5;
+export const DEFAULT_DEBATE_ROUNDS = 3;
+const DEBATE_ROUNDS_MESSAGE = `must be a whole number from 1 to ${DEBATE_ROUNDS_MAX}`;
+
+/**
+ * D405: a data edge set to debate. `rounds` is how many times the Attacker attacks and the Defender
+ * answers; `judgeNodeId` names the Agent that gives the verdict, and without one the Defender's last
+ * answer is the result. A judge that is gone by the time of a debate is simply not asked.
+ */
+export const DebateConfigSchema = z.object({
+  rounds: z
+    .number({ error: DEBATE_ROUNDS_MESSAGE })
+    .int(DEBATE_ROUNDS_MESSAGE)
+    .min(1, DEBATE_ROUNDS_MESSAGE)
+    .max(DEBATE_ROUNDS_MAX, DEBATE_ROUNDS_MESSAGE),
+  judgeNodeId: IdSchema.optional(),
+});
+export type DebateConfig = z.infer<typeof DebateConfigSchema>;
+
 /** A loop edge's config on the way in: `LoopConfig`, with an exit path the engine can read. */
 const LoopEdgeConfigSchema = LoopConfigSchema.extend({
   exitCondition: ExitConditionSchema.extend({ path: DottedPathSchema }).optional(),
@@ -517,8 +550,84 @@ export const EdgeSchema = z.object({
   from: EdgeEndpointSchema,
   to: EdgeEndpointSchema,
   loop: LoopConfigSchema.optional(),
+  /** D405: the two nodes this data edge joins debate when the person types `@debate`. */
+  debate: DebateConfigSchema.optional(),
 });
 export type Edge = z.infer<typeof EdgeSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Debate (D405, D406)                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The two debaters as a debate edge seats them: its source defends and its target attacks, unless
+ * their preset roles say the other way round.
+ */
+export function debateSides(
+  edge: Pick<Edge, 'from' | 'to'>,
+  roleOf: (nodeId: Id) => DebateRole | undefined,
+): { defenderId: Id; attackerId: Id } {
+  const from = edge.from.nodeId;
+  const to = edge.to.nodeId;
+  const swapped = roleOf(from) === 'attacker' || roleOf(to) === 'defender';
+  return swapped ? { defenderId: to, attackerId: from } : { defenderId: from, attackerId: to };
+}
+
+/** The node's preset debate role, read off any node (only an Agent can carry one). */
+export function debateRoleOf(node: Node): DebateRole | undefined {
+  return node.kind === 'agent' ? node.config.role : undefined;
+}
+
+/** Why `validateDebateEdge` refused an edge. Each is also a validation issue code. */
+export type DebateRefusalCode = 'debate_not_data_edge' | 'debate_needs_agents' | 'debate_judge_invalid';
+
+export type DebateEdgeCheck = { ok: true } | { ok: false; code: DebateRefusalCode; reason: string };
+
+/**
+ * D405: whether an edge may debate as configured. Pure, so the Canvas's menu and the engine's
+ * graph-ops agree: only a data edge debates, both its ends answer in chat (an Agent or a Model
+ * node), and the judge, when there is one, is a third such node of the workflow.
+ */
+export function validateDebateEdge(
+  edge: Pick<Edge, 'kind' | 'from' | 'to' | 'debate'>,
+  nodes: readonly Pick<Node, 'id' | 'kind'>[],
+): DebateEdgeCheck {
+  if (edge.debate === undefined) return { ok: true };
+  if (edge.kind !== 'data') {
+    return { ok: false, code: 'debate_not_data_edge', reason: 'Only a data connection can debate.' };
+  }
+  const speaks = (id: Id): boolean => {
+    const node = nodes.find((each) => each.id === id);
+    return node !== undefined && (node.kind === 'agent' || node.kind === 'model');
+  };
+  if (!speaks(edge.from.nodeId) || !speaks(edge.to.nodeId)) {
+    return {
+      ok: false,
+      code: 'debate_needs_agents',
+      reason: 'Both ends of a debate must be Agent nodes.',
+    };
+  }
+  const judge = edge.debate.judgeNodeId;
+  if (
+    judge !== undefined &&
+    (judge === edge.from.nodeId || judge === edge.to.nodeId || !speaks(judge))
+  ) {
+    return {
+      ok: false,
+      code: 'debate_judge_invalid',
+      reason: 'The judge must be a third Agent node of this workflow.',
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * How many turns a debate takes: the Defender's opening answer, then an attack and a defence per
+ * round, then the Judge's verdict when there is one.
+ */
+export function debateTurnCount(debate: DebateConfig, judged: boolean): number {
+  return 1 + 2 * debate.rounds + (judged ? 1 : 0);
+}
 
 /* -------------------------------------------------------------------------- */
 /* Loop edges (round 3 §2.4, FR-CON-003, FR-CON-007, BR-05)                    */

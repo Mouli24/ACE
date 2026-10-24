@@ -1,4 +1,4 @@
-import type { DataType, EdgeKind, ProviderType } from '@ace/contracts';
+import type { DataType, DebateConfig, EdgeKind, ProviderType } from '@ace/contracts';
 import { BaseEdge, type Edge as FlowEdge, type EdgeProps } from '@xyflow/react';
 import { memo, useEffect, useState } from 'react';
 
@@ -22,6 +22,8 @@ export type FlowEdgeData = {
   kind: EdgeKind;
   /** The provider type of the source (else the target) node. */
   accent?: ProviderType;
+  /** D405: the edge's debate, when it is set to debate. */
+  debate?: DebateConfig;
 };
 export type AceFlowEdge = FlowEdge<FlowEdgeData, 'typed'>;
 

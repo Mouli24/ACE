@@ -1,9 +1,10 @@
-import type { Node } from '@ace/contracts';
+import { DEBATE_ROUNDS_MAX, type DebateConfig, type Node } from '@ace/contracts';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   Icons,
   cn,
@@ -17,6 +18,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 
+import { debateChipLabel, newDebate, type DebateMenu } from '../edges/debate';
 import { DOC_H, DOC_W, anchorOfPort, cardSize, type Point } from '../nodes/anchors';
 import type { EdgeEnd, EdgeTypeOption } from './edge-edit';
 import { useEdgeFlow, type EdgeFlow } from './edge-flow';
@@ -30,7 +32,7 @@ import { edgePath } from './viewport';
  * `fixed` (D404): the loop has no exit condition, so it runs exactly `max` times.
  */
 export type EdgeLabel =
-  | { kind: 'data'; dataType: string }
+  | { kind: 'data'; dataType: string; debate?: DebateConfig }
   | { kind: 'loop'; max: number; iteration?: number; fixed?: boolean };
 
 export interface EdgeStrokeProps {
@@ -181,7 +183,10 @@ export const EdgeChip = memo(function EdgeChip({
   if (label.kind === 'data') {
     return (
       <div data-testid={`edge-label-${id}`} className={CHIP} style={style}>
-        {label.dataType}
+        {label.debate === undefined ? label.dataType : debateChipLabel(label.debate)}
+        {label.debate?.judgeNodeId !== undefined && (
+          <Icons.Gavel aria-label="judged" size={9} className="ml-[3px] inline" />
+        )}
       </div>
     );
   }
@@ -210,6 +215,10 @@ export interface EdgeEditApi {
   /** The type dropdown's rows, computed only when the dropdown opens. */
   typeOptions(edgeId: string): EdgeTypeOption[];
   pickType(edgeId: string, option: EdgeTypeOption): void;
+  /** D405: the debate rows — the edge's debate, why it cannot have one, and who could judge. */
+  debate(edgeId: string): DebateMenu;
+  /** D405: set the edge's debate, or turn it off (`null`). */
+  setDebate(edgeId: string, debate: DebateConfig | null): void;
   remove(edgeId: string): void;
   select(edgeId: string): void;
   /** The pointer is on (an edge id) or has left (undefined) one of an edge's controls. */
@@ -228,6 +237,121 @@ export interface EdgeReconnectDrag {
 
 const CHIP_BUTTON =
   'nopan nodrag flex cursor-pointer items-center gap-[3px] whitespace-nowrap rounded-[5px] border bg-[var(--chip)] py-[3px] pl-[8px] pr-[5px] text-[9.5px] font-medium text-[var(--muted)] outline-none hover:border-[#ef6b3f] hover:text-[var(--ink)] focus-visible:border-[var(--focus)] focus-visible:ring-2 focus-visible:ring-[rgba(239,107,63,0.35)]';
+
+/** One row of a choice list in the connection menu, checked when it is the current one. */
+function ChoiceItem({
+  label,
+  current,
+  testId,
+  onSelect,
+}: {
+  label: string;
+  current: boolean;
+  testId: string;
+  onSelect: () => void;
+}) {
+  return (
+    <DropdownMenuItem
+      data-testid={testId}
+      data-current={current ? 'true' : undefined}
+      onSelect={onSelect}
+    >
+      <span className="flex-1">{label}</span>
+      {current && <Icons.Check aria-hidden size={14} className="shrink-0 text-[#ef6b3f]" />}
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * D405: the connection menu's first rows. Off, one item turns the debate on (or says why it
+ * cannot). On, it is checked — choosing it again turns it off — and the rounds and the judge
+ * follow, each a short list with the current choice checked.
+ */
+function DebateItems({ edgeId, edit }: { edgeId: string; edit: EdgeEditApi }) {
+  const menu = useMemo(() => edit.debate(edgeId), [edit, edgeId]);
+  const current = menu.current;
+  if (current === undefined) {
+    return (
+      <>
+        <DropdownMenuItem
+          data-testid={`edge-debate-${edgeId}`}
+          disabled={menu.refused !== undefined}
+          title={menu.refused}
+          className="h-auto min-h-8 items-start py-[6px]"
+          onSelect={() => edit.setDebate(edgeId, newDebate(menu))}
+        >
+          <Icons.MessagesSquare aria-hidden size={13} className="mt-[2px] shrink-0" />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="font-medium">Debate</span>
+            <span className="max-w-[240px] whitespace-normal text-[11px] leading-[1.35] text-[var(--muted)]">
+              {menu.refused ?? 'Type @debate in chat and these two argue it out, round by round.'}
+            </span>
+          </span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+      </>
+    );
+  }
+  const rounds = Array.from({ length: DEBATE_ROUNDS_MAX }, (_, index) => index + 1);
+  const withJudge = (judgeNodeId: string | undefined): DebateConfig => ({
+    rounds: current.rounds,
+    ...(judgeNodeId === undefined ? {} : { judgeNodeId }),
+  });
+  return (
+    <>
+      <DropdownMenuItem
+        data-testid={`edge-debate-${edgeId}`}
+        data-current="true"
+        title="Turn the debate off"
+        onSelect={() => edit.setDebate(edgeId, null)}
+      >
+        <Icons.MessagesSquare aria-hidden size={13} className="shrink-0" />
+        <span className="flex-1 font-medium">Debate</span>
+        <Icons.Check aria-hidden size={14} className="shrink-0 text-[#ef6b3f]" />
+      </DropdownMenuItem>
+      <DropdownMenuLabel>Rounds</DropdownMenuLabel>
+      <div className="flex gap-[4px] px-[8px] pb-[6px]">
+        {rounds.map((count) => (
+          <DropdownMenuItem
+            key={count}
+            data-testid={`edge-debate-rounds-${count}`}
+            data-current={count === current.rounds ? 'true' : undefined}
+            className={cn(
+              'h-[26px] w-[30px] justify-center rounded-[6px] border px-0',
+              count === current.rounds
+                ? 'border-[#ef6b3f] text-[var(--ink)]'
+                : 'border-[var(--line)] text-[var(--muted)]',
+            )}
+            onSelect={() => edit.setDebate(edgeId, { ...current, rounds: count })}
+          >
+            {count}
+          </DropdownMenuItem>
+        ))}
+      </div>
+      <DropdownMenuLabel>Judge</DropdownMenuLabel>
+      <ChoiceItem
+        label="No judge"
+        current={current.judgeNodeId === undefined}
+        testId={`edge-debate-judge-none-${edgeId}`}
+        onSelect={() => edit.setDebate(edgeId, withJudge(undefined))}
+      />
+      {menu.judges.map((judge) => (
+        <ChoiceItem
+          key={judge.id}
+          label={
+            judge.role === 'judge' && !/judge/i.test(judge.name)
+              ? `${judge.name} (Judge)`
+              : judge.name
+          }
+          current={current.judgeNodeId === judge.id}
+          testId={`edge-debate-judge-${judge.id}`}
+          onSelect={() => edit.setDebate(edgeId, withJudge(judge.id))}
+        />
+      ))}
+      <DropdownMenuSeparator />
+    </>
+  );
+}
 
 /** The type dropdown's rows: every data type, the current one checked, the impossible ones greyed with why. */
 function EdgeTypeItems({ edgeId, edit }: { edgeId: string; edit: EdgeEditApi }) {
@@ -293,6 +417,7 @@ export const EdgeTypeChip = memo(function EdgeTypeChip({
   mx,
   my,
   dataType,
+  debate,
   active,
   selected,
   edit,
@@ -301,6 +426,8 @@ export const EdgeTypeChip = memo(function EdgeTypeChip({
   mx: number;
   my: number;
   dataType: string;
+  /** D405: set, the chip names the debate instead of the type. */
+  debate?: DebateConfig;
   /** Hovered or selected: the ✕ shows. */
   active: boolean;
   selected: boolean;
@@ -342,18 +469,30 @@ export const EdgeTypeChip = memo(function EdgeTypeChip({
           <button
             type="button"
             data-testid={`edge-label-${id}`}
-            aria-label={`Connection type: ${dataType}. Change type`}
+            aria-label={
+              debate === undefined
+                ? `Connection type: ${dataType}. Change type`
+                : `Debate connection, ${debate.rounds} rounds${debate.judgeNodeId === undefined ? '' : ', judged'}. Change`
+            }
             className={cn(
               CHIP_BUTTON,
               selected ? 'border-[#ef6b3f] text-[var(--ink)]' : 'border-[var(--frameLine)]',
             )}
           >
-            {dataType}
+            {debate === undefined ? dataType : debateChipLabel(debate)}
+            {debate?.judgeNodeId !== undefined && <Icons.Gavel aria-hidden size={9} />}
             <Icons.ChevronDown aria-hidden size={10} />
           </button>
         </DropdownMenuTrigger>
         {open && (
-          <DropdownMenuContent aria-label="Connection type" data-testid={`edge-type-menu-${id}`}>
+          <DropdownMenuContent
+            aria-label="Connection type"
+            data-testid={`edge-type-menu-${id}`}
+            collisionPadding={8}
+            // D405: the debate rows make the menu tall; it scrolls inside the room it has.
+            className="max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+          >
+            <DebateItems edgeId={id} edit={edit} />
             <EdgeTypeItems edgeId={id} edit={edit} />
           </DropdownMenuContent>
         )}
@@ -446,7 +585,13 @@ function labelOf(edge: AceAnyFlowEdge): EdgeLabel {
       ...(data.iteration === undefined ? {} : { iteration: data.iteration }),
     };
   }
-  return { kind: 'data', dataType: data?.dataType ?? 'text' };
+  return {
+    kind: 'data',
+    dataType: data?.dataType ?? 'text',
+    ...(data !== undefined && 'debate' in data && data.debate !== undefined
+      ? { debate: data.debate }
+      : {}),
+  };
 }
 
 const selectNodes = (state: ReactFlowState) => state.nodes;
@@ -686,6 +831,7 @@ export const EdgeLayer = memo(function EdgeLayer({
               mx={mx}
               my={my}
               dataType={label.dataType}
+              {...(label.debate === undefined ? {} : { debate: label.debate })}
               active={selected || hoveredEdgeId === id}
               selected={selected}
               edit={edit}

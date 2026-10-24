@@ -22,7 +22,7 @@ import {
   TurnTriggerSchema,
 } from './domain.js';
 import { PartSchema } from './envelope.js';
-import { IdSchema, LoopStopReasonSchema, TimestampSchema } from './graph.js';
+import { DEBATE_ROLES, IdSchema, LoopStopReasonSchema, TimestampSchema } from './graph.js';
 import { ApprovalDecisionSchema, ApprovalRequestSchema, VerdictSchema } from './guardrails.js';
 import {
   BudgetHaltSchema,
@@ -311,6 +311,27 @@ export const ChatTokenPayloadSchema = z.strictObject({
 });
 export type ChatTokenPayload = z.infer<typeof ChatTokenPayloadSchema>;
 
+/**
+ * D405: how far a debate on the thread has got. Sent as each turn starts (`turn`, with who speaks)
+ * and once at the end (`done`, `failed` — a turn could not answer — or `stopped`). Transient: the
+ * turns themselves are the `chat.message`s, so a client that missed one loses only the progress.
+ */
+export const DEBATE_PROGRESS_STATES = ['turn', 'done', 'failed', 'stopped'] as const;
+export const ChatDebatePayloadSchema = z.strictObject({
+  threadId: IdSchema,
+  /** The person's `@debate` turn the debate answers. */
+  userMessageId: IdSchema,
+  state: z.enum(DEBATE_PROGRESS_STATES),
+  /** 1-based: the turn starting now, or the last one that ran. */
+  step: z.number().int().min(0),
+  total: z.number().int().min(1),
+  speakerNodeId: IdSchema.optional(),
+  role: z.enum(DEBATE_ROLES).optional(),
+  /** The round the turn belongs to; absent for the opening answer and the verdict. */
+  round: z.number().int().min(1).optional(),
+});
+export type ChatDebatePayload = z.infer<typeof ChatDebatePayloadSchema>;
+
 /** An MCP server came up, went away, or changed how many tools it offers (FR-TOOL-007, D16). */
 export const McpStatusPayloadSchema = z.strictObject({
   serverId: IdSchema,
@@ -439,6 +460,7 @@ export const THREAD_EVENT_FRAME_SCHEMAS = [
   persistedFrame('chat.message', ChatMessagePayloadSchema),
   persistedFrame('chat.update', ChatUpdatePayloadSchema),
   transientFrame('chat.token', ChatTokenPayloadSchema),
+  transientFrame('chat.debate', ChatDebatePayloadSchema),
   persistedFrame('chat.approval_required', ChatApprovalRequiredPayloadSchema),
   persistedFrame('chat.approval_decided', ChatApprovalDecidedPayloadSchema),
 ] as const;
@@ -519,6 +541,7 @@ export const THREAD_EVENT_TYPES = [
   'chat.message',
   'chat.update',
   'chat.token',
+  'chat.debate',
   'chat.approval_required',
   'chat.approval_decided',
 ] as const;
@@ -546,6 +569,7 @@ export const TRANSIENT_EVENT_TYPES = [
   'node.token',
   'tool.started',
   'chat.token',
+  'chat.debate',
   'files.changed',
   'process.output',
   'process.exited',

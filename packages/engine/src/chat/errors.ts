@@ -73,6 +73,18 @@ export class ChatTargetInvalidError extends Error {
   }
 }
 
+/**
+ * D405: `@debate` from a node with no debate edge, or one whose ends cannot answer in chat. The
+ * gateway maps it to **400 `validation_failed`**, saying what to connect.
+ */
+export class ChatDebateUnavailableError extends Error {
+  override readonly name = 'ChatDebateUnavailableError';
+
+  constructor(reason: string) {
+    super(reason);
+  }
+}
+
 /** The router refused to pick a model for this chat (same codes as a run's pre-flight). */
 export class ChatModelError extends Error {
   override readonly name = 'ChatModelError';

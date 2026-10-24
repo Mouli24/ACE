@@ -204,6 +204,7 @@ function toEdge(row: EdgeRow): Edge {
     from: { nodeId: row.fromNodeId, portId: row.fromPortId },
     to: { nodeId: row.toNodeId, portId: row.toPortId },
     ...(row.loop === null ? {} : { loop: JSON.parse(row.loop) }),
+    ...(row.debate === null ? {} : { debate: JSON.parse(row.debate) }),
   });
 }
 
@@ -809,6 +810,7 @@ export class SqliteRepository implements Repository {
           toNodeId: values.toNodeId,
           toPortId: values.toPortId,
           loop: values.loop,
+          debate: values.debate,
         })
         .where(and(eq(edges.workspaceId, scope.workspaceId), eq(edges.id, edge.id)))
         .run();
@@ -970,6 +972,8 @@ export class SqliteRepository implements Repository {
       toNodeId: edge.to.nodeId,
       toPortId: edge.to.portId,
       loop: edge.loop === undefined ? null : toJsonColumn(edge.loop, `edge(${edge.id}).loop`),
+      debate:
+        edge.debate === undefined ? null : toJsonColumn(edge.debate, `edge(${edge.id}).debate`),
     };
   }
 }

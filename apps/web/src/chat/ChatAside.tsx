@@ -25,13 +25,15 @@ import { useSelectedRun } from '../runs/selected-run';
 import { useWorkflowTask } from '../runs/useWorkflowTask';
 import { agentMap, agentsOf, type AgentLook } from '../theme/agents';
 import { Avatar, Dot } from '../theme/primitives';
+import { chatDebateFor } from '../edges/debate';
 import { useWorkflowGraph } from '../workflows/hooks';
 import { ChatComposer, type ChatRosterEntry } from './ChatComposer';
 import { ChatConversation } from './ChatConversation';
 import { ChatThreadList } from './ChatThreadList';
+import { runningDebate, useDebateProgress } from './debate-store';
 import { useRestoreLastChat } from './last-chat';
 import { owedTurns, useChatSessions } from './session-store';
-import { sendToNode, stopNode, useThreadConversation } from './useChat';
+import { sendDebate, sendToNode, stopNode, useThreadConversation } from './useChat';
 import { isChatNode, useDropStaleChatTarget } from './workflow-target';
 
 /** Tabs drawn before the rest go under "More" (the theme's tabs row). */
@@ -242,9 +244,17 @@ export function ChatAside({
   );
   // PG-1.6: a reply on its way in the shown session can be stopped from the composer — D391:
   // until the last turn the session sent is answered, not just the first.
-  const replying = useChatSessions((state) =>
+  const pendingReply = useChatSessions((state) =>
     target === undefined ? false : state.sessions[target.id]?.pending !== undefined,
   );
+  // D405: and while a debate on the session's thread has a turn under way.
+  const sessionThreadId = useChatSessions((state) =>
+    target === undefined ? undefined : state.sessions[target.id]?.threadId,
+  );
+  const debating = useDebateProgress(
+    (state) => runningDebate(state.byThread, sessionThreadId) !== undefined,
+  );
+  const replying = pendingReply || debating;
   // D391: the turns sent after the one being answered, still in the engine's queue.
   const queued = useChatSessions((state) =>
     target === undefined ? 0 : Math.max(0, owedTurns(state.sessions[target.id] ?? {}).length - 1),
@@ -274,6 +284,12 @@ export function ChatAside({
         );
       }}
       workflowBlocked={workflowTask.blocked}
+      {...(target === undefined
+        ? {}
+        : { debate: chatDebateFor(target.id, nodes ?? [], graph.data?.edges ?? []) })}
+      onDebate={(content) => {
+        if (target !== undefined) void sendDebate(queryClient, target.id, content);
+      }}
     />
   );
 

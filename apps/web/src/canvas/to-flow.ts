@@ -180,6 +180,7 @@ export function toFlowEdges(
           dataType: portType.get(edge.from.portId) ?? 'text',
           kind: edge.kind,
           ...(accent === undefined ? {} : { accent }),
+          ...(edge.debate === undefined ? {} : { debate: edge.debate }),
         },
       },
     ];

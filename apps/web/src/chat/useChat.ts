@@ -14,6 +14,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { api } from '../app/api';
 import { getSocket } from '../app/socket';
+import { runningDebate, useDebateProgress } from './debate-store';
 import { chatKeys } from './keys';
 import {
   owedTurns,
@@ -140,6 +141,64 @@ export async function sendToNode(
     update(nodeId, ({ sending: _sending, ...rest }) =>
       refusal === undefined ? { ...rest, error: message } : { ...rest, refusal },
     );
+  }
+}
+
+/**
+ * D405: `@debate` from this node's session. The engine stores the message as the person's turn and
+ * runs the debate on the same thread; the session owes the first reply as for any message, and the
+ * debate's progress (`chat.debate`) keeps the rest of it on screen.
+ */
+export async function sendDebate(
+  queryClient: QueryClient,
+  nodeId: string,
+  content: Part[],
+): Promise<void> {
+  const { update } = useChatSessions.getState();
+  update(nodeId, ({ error: _error, refusal: _refusal, ...session }) => ({
+    ...session,
+    sending: true,
+  }));
+
+  try {
+    const session = sessionOf(nodeId);
+    let threadId: string | undefined;
+    if (session.fresh !== true) {
+      threadId =
+        session.threadId ??
+        byRecency(
+          await queryClient.fetchQuery({
+            queryKey: chatKeys.threads(nodeId),
+            queryFn: () => api().listNodeChatThreads(nodeId),
+          }),
+        )[0]?.id;
+    }
+
+    const response = await api().postNodeDebate(nodeId, {
+      content,
+      ...(threadId === undefined ? {} : { threadId }),
+    });
+    const userMessage: ChatMessage = {
+      id: response.messageId,
+      threadId: response.threadId,
+      role: 'user',
+      content,
+      verdicts: [],
+      at: new Date().toISOString(),
+    };
+    update(nodeId, ({ sending: _sending, fresh: _fresh, ...rest }) =>
+      oweTurn(
+        { ...rest, threadId: response.threadId },
+        { threadId: response.threadId, userMessage, since: Date.now() },
+      ),
+    );
+    void queryClient.invalidateQueries({ queryKey: chatKeys.threads(nodeId) });
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message !== ''
+        ? error.message
+        : 'The debate could not be started.';
+    update(nodeId, ({ sending: _sending, ...rest }) => ({ ...rest, error: message }));
   }
 }
 
@@ -290,7 +349,16 @@ export async function deleteMessage(
  * own stopped turn — so every thread the session still owes a turn on is stopped.
  */
 export async function stopNode(queryClient: QueryClient, nodeId: string): Promise<void> {
-  const threadIds = [...new Set(owedTurns(sessionOf(nodeId)).map((turn) => turn.threadId))];
+  const session = sessionOf(nodeId);
+  // D405: a debate keeps going after its first reply settles the turn owed, so its thread is
+  // stopped while one of its turns is under way.
+  const debating = runningDebate(useDebateProgress.getState().byThread, session.threadId);
+  const threadIds = [
+    ...new Set([
+      ...owedTurns(session).map((turn) => turn.threadId),
+      ...(debating === undefined ? [] : [debating.threadId]),
+    ]),
+  ];
   for (const threadId of threadIds) {
     try {
       const { stopped } = await api().stopChatThread(threadId);
@@ -402,6 +470,10 @@ export function useChatSocket(activeNodeId: string | undefined): void {
     const offToken = socket.on('chat.token', (payload) => {
       useChatSessions.getState().appendToken(payload.threadId, payload.delta);
     });
+    // D405: a debate's progress — which turn is under way, then how it ended.
+    const offDebate = socket.on('chat.debate', (payload) => {
+      useDebateProgress.getState().report(payload);
+    });
     const offMessage = socket.on('chat.message', (payload) => {
       // D391: a reply settles the one turn it answers; a turn still queued behind it stays owed.
       if (payload.message.role === 'agent')
@@ -427,6 +499,7 @@ export function useChatSocket(activeNodeId: string | undefined): void {
     });
     return () => {
       offToken();
+      offDebate();
       offMessage();
       offUpdate();
       offAsk();

@@ -118,6 +118,9 @@ export const AGENTIC_TOOL_CALL_CAP_MIGRATION_ID = '20261020T150000_agentic_tool_
  */
 export const AGENTIC_WORKSPACE_SUMMARY_MIGRATION_ID = '20261020T151000_agentic_workspace_summary';
 
+/** D405: a data edge's debate settings (JSON DebateConfig), null on a plain connection. */
+export const EDGE_DEBATE_MIGRATION_ID = '20261024T120000_edge_debate';
+
 /**
  * Forward-only migrations. Once a migration is on `main` it is never edited — a correction is a new
  * migration (CLAUDE.md §3.4 rule 5). Ids are timestamped so they apply in the order they were
@@ -857,6 +860,14 @@ export const MIGRATIONS: readonly Migration[] = [
       -- D378: NodeRun.workspace (JSON WorkspaceSummary) and ToolCall.changedPaths (JSON string[]).
       ALTER TABLE node_runs ADD COLUMN workspace_json TEXT;
       ALTER TABLE tool_calls ADD COLUMN changed_paths_json TEXT;
+    `,
+  },
+  {
+    id: EDGE_DEBATE_MIGRATION_ID,
+    up: `
+      -- D405: Edge.debate (JSON DebateConfig). An older checkout never reads it, so a debate edge is
+      -- a plain connection there.
+      ALTER TABLE edges ADD COLUMN debate TEXT;
     `,
   },
 ];

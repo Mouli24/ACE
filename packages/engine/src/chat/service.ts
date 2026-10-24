@@ -6,6 +6,8 @@ import {
   DEFAULT_MAX_TOOL_CALLS,
   agentWorkspaceOf,
   blockedChatReply,
+  debateRoleOf,
+  debateSides,
   estimateTokens,
   isAgentic,
   isCliProviderType,
@@ -21,6 +23,8 @@ import {
   type ChatThread,
   type ChatThreadDetail,
   type ChatVerdict,
+  type DebateRequest,
+  type DebateRole,
   type Id,
   type Message,
   type MessageListResponse,
@@ -45,6 +49,7 @@ import {
 } from '../checkpoints/writing.js';
 import type { ContextGuard } from '../context/guard.js';
 import { classifyError } from '../errors/index.js';
+import { debateInstructions, debateSteps } from '../debate/index.js';
 import { createBatcher } from '../events/batcher.js';
 import { workflowUpdatedEvent, type EventBus } from '../events/index.js';
 import type { CheckRunner, SecretMasker } from '../guardrails/checks.js';
@@ -76,6 +81,7 @@ import { activityItemFor } from './activity.js';
 import {
   ChatActionInvalidError,
   ChatApprovalNotFoundError,
+  ChatDebateUnavailableError,
   ChatInputBlockedError,
   ChatMessageNotFoundError,
   ChatModelError,
@@ -116,6 +122,11 @@ import {
 
 /** A `agent` or `model` node — the only kinds with a direct chat. */
 type ChatNode = Extract<Node, { kind: 'agent' | 'model' }>;
+
+/** What the node itself is told: an Agent's instructions, a Model node's system prompt. */
+function ownInstructions(node: ChatNode): string {
+  return node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
+}
 
 /**
  * What `resolveNode` returns: the node, the project whose default policy guards it and whose
@@ -182,6 +193,12 @@ export interface ChatService {
   listMessages(workflowId: Id, query: MessageQuery): Promise<MessageListResponse>;
   /** `POST /nodes/:id/chat` (FR-CHAT-004..008): a direct chat turn; the reply streams over the socket. */
   chat(nodeId: Id, request: ChatRequest): Promise<ChatBegun>;
+  /**
+   * D405 `POST /nodes/:id/debate`: store the person's `@debate` turn, then run the debate between
+   * the node and the one its debate edge joins it to — turn by turn, in the background, each turn
+   * a reply on the thread from the node that spoke. `done` settles with the debate's last turn.
+   */
+  debate(nodeId: Id, request: DebateRequest): Promise<ChatBegun>;
   /** `GET /nodes/:id/chat/threads` (§2.4). */
   listThreads(nodeId: Id): Promise<ChatThread[]>;
   /** `GET /chat/threads/:id` (§2.4). */
@@ -687,6 +704,12 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     historyBefore?: Id;
     /** PG-2.4 (D361): the person chose "Run without undo" for this one turn. */
     withoutUndo?: boolean;
+    /**
+     * D405: a debate turn. Its side's instructions stand in for the node's own (they carry them),
+     * and the person's `@debate` turn stays in the history it reads: the turn's new line is the
+     * moderator's cue in `userParts`.
+     */
+    debate?: { instructions: string };
   }
 
   /** Set as a reply's path runs, so a throw anywhere can be closed out exactly once (PG-1.5). */
@@ -702,13 +725,19 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
    * the replies that landed while it waited — a queued `@reviewer` sees what the coder just did.
    * The turn's own message is the new turn, so it is left out, and so is any later user message:
    * that is a question for a later turn. A superseded or deleted turn is never read (PG-1.6).
+   * `keepOwn` (D405): a debate turn reads the person's turn as part of the conversation.
    */
-  async function historyFor(threadId: Id, userMessageId: Id, before?: Id): Promise<ChatMessage[]> {
+  async function historyFor(
+    threadId: Id,
+    userMessageId: Id,
+    before?: Id,
+    keepOwn = false,
+  ): Promise<ChatMessage[]> {
     const messages = await repository.chatMessages.listByThread(scope, threadId);
     return messages.filter(
       (message) =>
         standing(message) &&
-        message.id !== userMessageId &&
+        (keepOwn || message.id !== userMessageId) &&
         !(message.role === 'user' && message.id > userMessageId) &&
         (before === undefined || message.id < before),
     );
@@ -864,10 +893,14 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       // Inside the turn (D287 fix F-M4): a thread or catalog that cannot be read ends the turn as
       // a stored failed reply, like any other failure, rather than leaving the client "typing…".
       // Read now, holding the project's queue — never the snapshot from before the turn waited.
-      const history = await historyFor(threadId, context.userMessageId, context.historyBefore);
+      const history = await historyFor(
+        threadId,
+        context.userMessageId,
+        context.historyBefore,
+        context.debate !== undefined,
+      );
 
-      const instructions =
-        node.kind === 'agent' ? node.config.instructions : (node.config.systemPrompt ?? '');
+      const instructions = context.debate?.instructions ?? ownInstructions(node);
       const budgetTokens =
         node.kind === 'agent'
           ? node.config.contextPolicy.budgetTokens
@@ -1414,6 +1447,96 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     return { threadId: thread.id, messageId: userMessage.id, done };
   }
 
+  /**
+   * D405: the debate's turns, one after another, each a reply on the thread from the node in that
+   * seat — so it is guarded, priced, stored and streamed as any chat reply is. `chat.debate` says
+   * which turn is starting and how the debate ended. A turn that fails ends the debate there; a
+   * stop on the thread ends it too, not only the turn under way. Settles with the last turn stored.
+   */
+  async function runDebate(input: {
+    thread: ChatThread;
+    workflowId: Id;
+    projectId: Id;
+    userMessage: ChatMessage;
+    seats: Record<DebateRole, ChatNode | undefined>;
+    rounds: number;
+    guardrails: ChatGuardrailDeps | undefined;
+  }): Promise<ChatMessage> {
+    const { thread, userMessage, seats } = input;
+    const steps = debateSteps(input.rounds, seats.judge !== undefined);
+    const total = steps.length;
+    const progress = (payload: {
+      state: 'turn' | 'done' | 'failed' | 'stopped';
+      step: number;
+      speakerNodeId?: Id;
+      role?: DebateRole;
+      round?: number;
+    }): Promise<void> =>
+      bus.emitTransient({
+        type: 'chat.debate',
+        payload: { threadId: thread.id, userMessageId: userMessage.id, total, ...payload },
+      });
+
+    const controller = new AbortController();
+    let running = inFlight.get(thread.id);
+    if (running === undefined) {
+      running = new Set();
+      inFlight.set(thread.id, running);
+    }
+    running.add(controller);
+
+    let last: ChatMessage = userMessage;
+    let step = 0;
+    try {
+      for (const turn of steps) {
+        const node = seats[turn.role];
+        if (node === undefined) continue;
+        if (controller.signal.aborted) {
+          await progress({ state: 'stopped', step });
+          return last;
+        }
+        step += 1;
+        await progress({
+          state: 'turn',
+          step,
+          speakerNodeId: node.id,
+          role: turn.role,
+          ...(turn.round === undefined ? {} : { round: turn.round }),
+        });
+        const policy =
+          deps.policies === undefined ? null : await deps.policies.resolve(input.projectId, node);
+        last = await generateReply({
+          node,
+          mainNodeId: thread.nodeId,
+          workflowId: input.workflowId,
+          projectId: input.projectId,
+          // D407: a debate turn is a text turn — it neither reads nor writes the project folder.
+          workspace: undefined,
+          chosen: routeFor(node),
+          policy,
+          threadId: thread.id,
+          userMessageId: userMessage.id,
+          userParts: [{ type: 'text', text: turn.cue }],
+          guardrails: input.guardrails,
+          debate: { instructions: debateInstructions(turn.role, ownInstructions(node)) },
+        });
+        if (last.error !== undefined) {
+          const stopped = controller.signal.aborted || last.error.kind === 'user_cancelled';
+          await progress({ state: stopped ? 'stopped' : 'failed', step });
+          return last;
+        }
+      }
+      await progress({ state: 'done', step });
+      return last;
+    } catch (error) {
+      await progress({ state: 'failed', step });
+      throw error;
+    } finally {
+      running.delete(controller);
+      if (running.size === 0) inFlight.delete(thread.id);
+    }
+  }
+
   return {
     async listApprovals(threadId) {
       const thread = await repository.chatThreads.get(scope, threadId);
@@ -1740,6 +1863,121 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         chosen,
         ...(request.withoutUndo === true ? { withoutUndo: true } : {}),
       });
+    },
+
+    async debate(nodeId, request) {
+      const resolved = await deps.resolveNode(nodeId);
+      if (resolved === null) throw new ChatNodeNotFoundError(nodeId);
+      const { node: addressed, projectId, workflowId } = resolved;
+      if (addressed.kind !== 'agent' && addressed.kind !== 'model') {
+        throw new NotAnAgentNodeError(nodeId);
+      }
+
+      /* The named thread, as in `chat`: its own node is the one whose debate edge is used. */
+      let found: ChatThread | undefined;
+      let owner: ChatNode = addressed;
+      if (request.threadId !== undefined) {
+        const thread = await repository.chatThreads.get(scope, request.threadId);
+        if (thread === null) throw new ChatThreadNotFoundError(request.threadId);
+        if (thread.nodeId !== nodeId) {
+          const other = await deps.resolveNode(thread.nodeId);
+          if (other === null || other.workflowId !== workflowId) {
+            throw new ChatThreadNodeMismatchError(request.threadId, nodeId);
+          }
+          if (other.node.kind !== 'agent' && other.node.kind !== 'model') {
+            throw new NotAnAgentNodeError(thread.nodeId);
+          }
+          owner = other.node;
+        }
+        found = thread;
+      }
+
+      /* The debate edge that joins this node to another, and who sits where (D405, D406). */
+      const nodes = await repository.nodes.listByWorkflow(scope, workflowId);
+      const edges = await repository.edges.listByWorkflow(scope, workflowId);
+      const edge = edges.find(
+        (each) =>
+          each.debate !== undefined &&
+          (each.from.nodeId === owner.id || each.to.nodeId === owner.id),
+      );
+      if (edge?.debate === undefined) {
+        throw new ChatDebateUnavailableError(
+          `"${owner.name}" has no debate connection. Connect it to another agent and choose ` +
+            "Debate on the connection's menu.",
+        );
+      }
+      const byId = new Map(nodes.map((each) => [each.id, each]));
+      const seat = (id: Id | undefined): ChatNode | undefined => {
+        const each = id === undefined ? undefined : byId.get(id);
+        return each !== undefined && (each.kind === 'agent' || each.kind === 'model')
+          ? each
+          : undefined;
+      };
+      const sides = debateSides(edge, (id) => {
+        const each = byId.get(id);
+        return each === undefined ? undefined : debateRoleOf(each);
+      });
+      const defender = seat(sides.defenderId);
+      const attacker = seat(sides.attackerId);
+      if (defender === undefined || attacker === undefined) {
+        throw new ChatDebateUnavailableError('Both ends of a debate must be Agent nodes.');
+      }
+      const judge = seat(edge.debate.judgeNodeId);
+      // First, before a turn exists: a debater that cannot answer says so in the 400.
+      for (const each of [defender, attacker, judge]) if (each !== undefined) routeFor(each);
+
+      /* Input point first (FR-CHAT-008), under the policy of the node the person wrote to. */
+      const policy =
+        deps.policies === undefined ? null : await deps.policies.resolve(projectId, owner);
+      const guardrails = guardrailDeps();
+      let inputParts: Part[] = [...request.content];
+      let inputVerdicts: ChatVerdict[] = [];
+      if (guardrails !== undefined) {
+        const checked = evaluateChatInput(policy, request.content, guardrails);
+        if (checked.kind === 'blocked') {
+          throw new ChatInputBlockedError(checked.verdicts, checked.reason);
+        }
+        inputParts = checked.parts;
+        inputVerdicts = checked.verdicts;
+      }
+
+      let thread: ChatThread;
+      if (found !== undefined) {
+        thread = found;
+      } else {
+        const at = now();
+        thread = await repository.chatThreads.create(scope, {
+          id: nextId(),
+          nodeId,
+          title: titleFor(request.content),
+          createdAt: at,
+          updatedAt: at,
+        });
+      }
+      const userMessage: ChatMessage = {
+        id: nextId(),
+        threadId: thread.id,
+        role: 'user',
+        content: inputParts,
+        verdicts: inputVerdicts,
+        at: now(),
+      };
+      await repository.chatMessages.append(scope, userMessage);
+      await repository.chatThreads.touch(scope, thread.id, now());
+
+      const done = runDebate({
+        thread,
+        workflowId,
+        projectId,
+        userMessage,
+        seats: { defender, attacker, judge },
+        rounds: edge.debate.rounds,
+        guardrails,
+      });
+      done.catch((error: unknown) => {
+        logger.error({ subsystem: 'chat', err: error, threadId: thread.id }, 'debate failed');
+      });
+      return { threadId: thread.id, messageId: userMessage.id, done };
     },
 
     listThreads: (nodeId) => repository.chatThreads.listByNode(scope, nodeId),

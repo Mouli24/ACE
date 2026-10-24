@@ -291,11 +291,21 @@ export function AgentPanel({
        * D285, D333: the node's objective, in the theme's System prompt box. It is what a run of the
        * node is asked to achieve and the standing instruction of every chat with it.
        */}
+      {/*
+       * D406: a preset debater's own prompt is the engine's and is never shown; what is typed here
+       * is added on top of it.
+       */}
       <TextAreaField
-        label="System prompt"
+        label={config.role === undefined ? 'System prompt' : 'Your instructions'}
         value={config.instructions}
         onCommit={(instructions) => patch({ instructions })}
         rows={8}
+        {...(config.role === undefined
+          ? {}
+          : {
+              placeholder:
+                'Optional. Added on top of the built-in debate prompt, e.g. "Focus on cost and security."',
+            })}
       />
       <WorkspaceAccessField
         config={config}

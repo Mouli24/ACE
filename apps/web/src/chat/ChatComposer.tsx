@@ -1,4 +1,10 @@
-import { parseWorkflowAddress, type Artifact, type Part, type RosterEntry } from '@ace/contracts';
+import {
+  parseDebateAddress,
+  parseWorkflowAddress,
+  type Artifact,
+  type Part,
+  type RosterEntry,
+} from '@ace/contracts';
 import {
   cn,
   formatBytes,
@@ -55,6 +61,8 @@ export function ChatComposer({
   onStop,
   onWorkflow,
   workflowBlocked,
+  debate,
+  onDebate,
 }: {
   /** `targetNodeId` is set when an `@handle` names a node other than the main one. */
   onSend: (content: Part[], targetNodeId: string | undefined) => void;
@@ -80,6 +88,14 @@ export function ChatComposer({
   onWorkflow?: (task: string, extra: Part[]) => void;
   /** Why `@workflow` cannot start a run right now (one is going), or nothing. */
   workflowBlocked?: string | undefined;
+  /**
+   * D405 `@debate <task>`: the conversation's node and the one its debate edge joins it to argue
+   * it out. `ready` says who debates, for the line under the box; `blocked` says why it cannot.
+   * Absent, `@debate` is not offered.
+   */
+  debate?: { ready: string } | { blocked: string };
+  /** Sends the whole message, `@debate` and all, as the debate's opening turn. */
+  onDebate?: (content: Part[]) => void;
 }) {
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
@@ -109,14 +125,26 @@ export function ChatComposer({
   }, [draft]);
 
   const at =
-    roster.length === 0 && onWorkflow === undefined ? undefined : handlePartial(text, caret);
+    roster.length === 0 && onWorkflow === undefined && debate === undefined
+      ? undefined
+      : handlePartial(text, caret);
   // `@workflow` heads the picker: the whole workflow, before any one node of it.
   const workflowOffered =
     onWorkflow !== undefined && at !== undefined && 'workflow'.startsWith(at.partial);
-  const matches: Array<ChatRosterEntry | 'workflow'> =
+  // D405: `@debate` next, while this conversation's node can debate.
+  const debateOffered =
+    debate !== undefined &&
+    'ready' in debate &&
+    at !== undefined &&
+    'debate'.startsWith(at.partial);
+  const matches: Array<ChatRosterEntry | 'workflow' | 'debate'> =
     at === undefined
       ? []
-      : [...(workflowOffered ? ['workflow' as const] : []), ...handleOptions(roster, at.partial)];
+      : [
+          ...(workflowOffered ? ['workflow' as const] : []),
+          ...(debateOffered ? ['debate' as const] : []),
+          ...handleOptions(roster, at.partial),
+        ];
   const pickerOpen = matches.length > 0;
   const active = Math.min(cursor, Math.max(matches.length - 1, 0));
 
@@ -127,8 +155,18 @@ export function ChatComposer({
       ? undefined
       : (workflowBlocked ??
         (workflow.task === '' ? 'Say what the workflow should do after @workflow.' : undefined));
+  // D405: a message whose first address is `@debate` starts a debate instead.
+  const debateAsk = debate === undefined ? undefined : parseDebateAddress(text);
+  const debateError =
+    debateAsk === undefined || debate === undefined
+      ? undefined
+      : 'blocked' in debate
+        ? debate.blocked
+        : debateAsk.task === ''
+          ? 'Say what to debate after @debate.'
+          : undefined;
   const preview =
-    workflow !== undefined || mainNodeId === undefined
+    workflow !== undefined || debateAsk !== undefined || mainNodeId === undefined
       ? undefined
       : previewChatTarget(text, roster, mainNodeId);
   const hasBody = text.trim().length > 0 || attachments.length > 0 || chips.length > 0;
@@ -138,7 +176,9 @@ export function ChatComposer({
     hasBody &&
     (workflow !== undefined
       ? workflowError === undefined
-      : preview !== undefined && preview.canSend);
+      : debateAsk !== undefined
+        ? debateError === undefined && onDebate !== undefined
+        : preview !== undefined && preview.canSend);
 
   const place = (next: string, position: number): void => {
     setText(next);
@@ -151,9 +191,9 @@ export function ChatComposer({
     requestAnimationFrame(() => element.setSelectionRange(position, position));
   };
 
-  const pick = (entry: ChatRosterEntry | 'workflow') => {
+  const pick = (entry: ChatRosterEntry | 'workflow' | 'debate') => {
     if (at === undefined) return;
-    const handle = entry === 'workflow' ? entry : entry.handle;
+    const handle = typeof entry === 'string' ? entry : entry.handle;
     const completed = completeHandle(text, at, caret, handle);
     place(completed.text, completed.caret);
   };
@@ -165,6 +205,8 @@ export function ChatComposer({
     for (const artifact of attachments) extra.push(partForArtifact(artifact));
     if (workflow !== undefined && onWorkflow !== undefined) {
       onWorkflow(workflow.task, extra);
+    } else if (debateAsk !== undefined && onDebate !== undefined) {
+      onDebate([{ type: 'text', text: text.trim() }, ...extra]);
     } else {
       if (preview === undefined) return;
       const content: Part[] = [];
@@ -201,6 +243,11 @@ export function ChatComposer({
 
   const showPreview = preview !== undefined && text.trim() !== '';
   const showWorkflow = workflow !== undefined && workflowError === undefined;
+  const showDebate =
+    debateAsk !== undefined &&
+    debateError === undefined &&
+    debate !== undefined &&
+    'ready' in debate;
 
   return (
     <div
@@ -244,6 +291,30 @@ export function ChatComposer({
                     {' '}
                     — run the whole workflow on this task
                   </span>
+                </span>
+              </button>
+            ) : entry === 'debate' ? (
+              <button
+                key="debate"
+                type="button"
+                role="option"
+                aria-selected={index === active}
+                data-testid="chat-mention-option-debate"
+                data-highlighted={index === active ? '' : undefined}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => pick(entry)}
+                className={cn(MENU_ITEM_CLASS, 'text-left hover:bg-[rgba(239,107,63,0.12)]')}
+              >
+                <Avatar
+                  letter="⇄"
+                  color="#c94c27"
+                  size={16}
+                  fontSize={8}
+                  className="font-semibold"
+                />
+                <span className="min-w-0 truncate">
+                  <span className="font-machine">@debate</span>
+                  <span className="text-[var(--muted)]"> — let the agents argue it out</span>
                 </span>
               </button>
             ) : (
@@ -394,6 +465,11 @@ export function ChatComposer({
                 starts a run
               </span>
             )}
+            {showDebate && (
+              <span data-testid="chat-send-preview" className="text-[var(--muted)]">
+                debate: <span className="font-semibold text-[var(--ink)]">{debate.ready}</span>
+              </span>
+            )}
             {showPreview && preview.canSend && (
               <span data-testid="chat-send-preview" className="text-[var(--muted)]">
                 to <span className="font-semibold text-[var(--ink)]">{preview.name}</span>
@@ -459,6 +535,11 @@ export function ChatComposer({
       {workflowError !== undefined && text.trim() !== '' && (
         <p role="alert" data-testid="chat-target-error" className="text-[11px] text-danger">
           {workflowError}
+        </p>
+      )}
+      {debateError !== undefined && (
+        <p role="alert" data-testid="chat-target-error" className="text-[11px] text-danger">
+          {debateError}
         </p>
       )}
       {preview?.error !== undefined && (

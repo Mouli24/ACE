@@ -166,6 +166,7 @@ import {
   PostMessageResponseSchema,
   ChatRequestSchema,
   ChatResponseSchema,
+  DebateRequestSchema,
   ChatThreadSchema,
   ChatThreadDetailSchema,
   ChatEditRequestSchema,
@@ -175,6 +176,7 @@ import {
   type ChatStopResponse,
   type ChatRequest,
   type ChatResponse,
+  type DebateRequest,
   type ChatThread,
   type ChatThreadDetail,
   type CreateMcpServerRequest,
@@ -817,6 +819,15 @@ export function createAceClient(options: AceClientOptions) {
     postNodeChat: (nodeId: Id, body: ChatRequest): Promise<ChatResponse> =>
       request('POST', `/nodes/${nodeId}/chat`, ChatResponseSchema, {
         schema: ChatRequestSchema,
+        value: body,
+      }),
+    /**
+     * D405 `POST /nodes/:id/debate` answers 202 `{ threadId, messageId }`, as a chat turn does; the
+     * debaters' turns arrive as `chat.message`s on the thread, and `chat.debate` reports progress.
+     */
+    postNodeDebate: (nodeId: Id, body: DebateRequest): Promise<ChatResponse> =>
+      request('POST', `/nodes/${nodeId}/debate`, ChatResponseSchema, {
+        schema: DebateRequestSchema,
         value: body,
       }),
     listNodeChatThreads: (nodeId: Id): Promise<ChatThread[]> =>

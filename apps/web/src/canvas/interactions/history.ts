@@ -76,9 +76,15 @@ function inverseOf(graph: GraphState, op: GraphOp): GraphOp[] {
 
     case 'update_edge': {
       const edge = graph.edges.find((e) => e.id === op.edgeId);
-      return edge?.loop
-        ? [{ op: 'update_edge', edgeId: op.edgeId, patch: { loop: edge.loop } }]
-        : [];
+      if (edge === undefined) return [];
+      // D405: undoing a debate change puts the debate back as it was, or off.
+      const patch = {
+        ...(op.patch.loop !== undefined && edge.loop ? { loop: edge.loop } : {}),
+        ...(op.patch.debate !== undefined ? { debate: edge.debate ?? null } : {}),
+      };
+      return Object.keys(patch).length === 0
+        ? []
+        : [{ op: 'update_edge', edgeId: op.edgeId, patch }];
     }
 
     case 'delete_edge': {

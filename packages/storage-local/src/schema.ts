@@ -92,6 +92,8 @@ export const edges = sqliteTable(
     toPortId: text('to_port_id').notNull(),
     /** JSON LoopConfig, null on a data edge. */
     loop: text('loop'),
+    /** JSON DebateConfig (D405), null unless the data edge debates. */
+    debate: text('debate'),
   },
   (table) => [
     index('edges_workflow_idx').on(table.workspaceId, table.workflowId, table.id),

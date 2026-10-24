@@ -52,9 +52,14 @@ export function applyOps(
         break;
 
       case 'update_edge':
-        edges = edges.map((e) =>
-          e.id === op.edgeId ? { ...e, ...(op.patch.loop ? { loop: op.patch.loop } : {}) } : e,
-        );
+        edges = edges.map((e) => {
+          if (e.id !== op.edgeId) return e;
+          const next = { ...e, ...(op.patch.loop ? { loop: op.patch.loop } : {}) };
+          // D405: `debate: null` turns the debate off; absent leaves it as it is.
+          if (op.patch.debate === undefined) return next;
+          const { debate: _was, ...plain } = next;
+          return op.patch.debate === null ? plain : { ...plain, debate: op.patch.debate };
+        });
         break;
 
       case 'delete_edge':

@@ -1,4 +1,13 @@
-import type { Edge, GraphOp, Node, Position } from '@ace/contracts';
+import {
+  DEFAULT_DEBATE_ROUNDS,
+  debateRoleOf,
+  type DebateConfig,
+  type DebateRole,
+  type Edge,
+  type GraphOp,
+  type Node,
+  type Position,
+} from '@ace/contracts';
 
 import { newId } from '../lib/ulid';
 import {
@@ -73,6 +82,23 @@ export interface NewStagePlan {
   ops: GraphOp[];
 }
 
+/** D406: what a preset debater is called when it is added. */
+export const PRESET_NAME: Record<DebateRole, string> = {
+  defender: 'Defender',
+  attacker: 'Attacker',
+  judge: 'Judge',
+};
+
+/** The debate a new Defender–Attacker link starts with: judged by the board's one preset Judge. */
+function startingDebate(nodes: readonly Node[]): DebateConfig {
+  const judges = nodes.filter((node) => debateRoleOf(node) === 'judge');
+  const [only] = judges;
+  return {
+    rounds: DEFAULT_DEBATE_ROUNDS,
+    ...(judges.length === 1 && only !== undefined ? { judgeNodeId: only.id } : {}),
+  };
+}
+
 /**
  * The theme's "Add node" (D332, amended by D351): a new Agent named "New agent" after the last
  * stage — 320 to the right and 50 up or down, alternating — or at (440, 150) on an empty board;
@@ -84,32 +110,66 @@ export function planNewStage({
   edges,
   workflowId,
   choice,
+  preset,
 }: {
   nodes: readonly Node[];
   edges: readonly Edge[];
   workflowId: string;
   choice: { providerId: string; modelId: string };
+  /** D406: a preset debater — named for its role and carrying it. */
+  preset?: DebateRole;
 }): NewStagePlan {
   const stages = agentsOf(nodes);
   const lastId = stages[stages.length - 1]?.nodeId;
   const last = nodes.find((node) => node.id === lastId);
   const k = stages.length + 1;
+  // A Judge sits below the debate rather than after it: it is not a stage the work flows through.
   const position = last
-    ? { x: last.position.x + 320, y: last.position.y + (k % 2 ? 50 : -50) }
+    ? preset === 'judge'
+      ? { x: last.position.x - 160, y: last.position.y + 360 }
+      : { x: last.position.x + 320, y: last.position.y + (k % 2 ? 50 : -50) }
     : FIRST_STAGE_AT;
 
   const init: NewNodeInit = {
     // "New agent", then "New agent 2", "New agent 3"…: never a name the workflow already has
     name: uniqueNodeName(
-      NEW_STAGE_NAME,
+      preset === undefined ? NEW_STAGE_NAME : PRESET_NAME[preset],
       nodes.map((each) => each.name),
     ),
     providerId: choice.providerId,
     modelId: choice.modelId,
   };
-  const node = applyNewNodeInit(createNode('agent', workflowId, position), init);
+  const created = applyNewNodeInit(createNode('agent', workflowId, position), init);
+  const node: Node =
+    preset === undefined || created.kind !== 'agent'
+      ? created
+      : { ...created, config: { ...created.config, role: preset } };
 
   const ops: GraphOp[] = [{ op: 'add_node', node }];
+
+  /*
+   * D406: a new Judge joins the board's one unjudged debate as its judge, and is not linked into
+   * the flow. A Defender and an Attacker added one after the other are linked as a debate.
+   */
+  if (preset === 'judge') {
+    const unjudged = edges.filter(
+      (edge) => edge.debate !== undefined && edge.debate.judgeNodeId === undefined,
+    );
+    const [only] = unjudged;
+    if (unjudged.length === 1 && only?.debate !== undefined) {
+      ops.push({
+        op: 'update_edge',
+        edgeId: only.id,
+        patch: { debate: { ...only.debate, judgeNodeId: node.id } },
+      });
+    }
+    return { node, ops };
+  }
+  const lastRole = last === undefined ? undefined : debateRoleOf(last);
+  const debates =
+    (preset === 'attacker' && lastRole === 'defender') ||
+    (preset === 'defender' && lastRole === 'attacker');
+
   const from = last?.outputs[0];
   const to = node.inputs[0];
   if (last !== undefined && from !== undefined && to !== undefined) {
@@ -128,6 +188,7 @@ export function planNewStage({
           kind: 'data',
           from: { nodeId: last.id, portId: from.id },
           to: { nodeId: node.id, portId: to.id },
+          ...(debates ? { debate: startingDebate(nodes) } : {}),
         },
       });
     }

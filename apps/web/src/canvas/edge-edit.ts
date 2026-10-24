@@ -174,6 +174,8 @@ export function edgeTypeOptions(
           kind: 'data',
           from: { nodeId: from.id, portId: source.port.id },
           to: { nodeId: to.id, portId: target.port.id },
+          // D405: a debate edge stays one whatever it carries.
+          ...(edge.debate === undefined ? {} : { debate: edge.debate }),
         },
       },
     ];
@@ -232,6 +234,8 @@ export function reconnectPlan(
           kind: 'data',
           from: { nodeId: verdict.fromNodeId, portId: verdict.source.id },
           to: { nodeId: verdict.toNodeId, portId: verdict.target.id },
+          // D405: moving an end keeps the debate; the engine checks it against the new ends.
+          ...(edge.debate === undefined ? {} : { debate: edge.debate }),
         },
       },
     ],

@@ -1,6 +1,7 @@
 import {
   isAddressableNode,
   isCliProviderType,
+  parseDebateAddress,
   type ChatMessage,
   type Node,
   type Part,
@@ -25,6 +26,8 @@ import { clockTime } from '../theme/format';
 import { Avatar } from '../theme/primitives';
 import { ChangesCardSlot } from './ChangesCardSlot';
 import { ChatActivity } from './ChatActivity';
+import { DebateBlock } from './DebateBlock';
+import { runningDebate, useDebateProgress } from './debate-store';
 import { useFollowTail } from './follow-tail';
 import {
   CHAT_NOTE_CLASS,
@@ -65,13 +68,37 @@ function turnBudgetMs(node: Node, providers: readonly Provider[] | undefined): n
   return timeoutMs > 0 && cli ? Math.max(timeoutMs, CLI_TURN_FLOOR_MS) : timeoutMs;
 }
 
-/** One rendered item: a turn, or a run of turns a retry or an edit replaced (PG-1.6). */
-type Item = { kind: 'turn'; message: ChatMessage } | { kind: 'earlier'; messages: ChatMessage[] };
+/**
+ * One rendered item: a turn, a run of turns a retry or an edit replaced (PG-1.6), or (D405) the
+ * replies a person's `@debate` turn drew — every agent turn after it until they write again.
+ */
+type Item =
+  | { kind: 'turn'; message: ChatMessage }
+  | { kind: 'earlier'; messages: ChatMessage[] }
+  | { kind: 'debate'; opener: ChatMessage; turns: ChatMessage[] };
+
+/** The text a person wrote in a turn, for telling a `@debate` turn from any other. */
+const textOf = (message: ChatMessage): string =>
+  message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n');
 
 function itemsOf(messages: readonly ChatMessage[]): Item[] {
   const items: Item[] = [];
+  let debate: Extract<Item, { kind: 'debate' }> | undefined;
   for (const message of messages) {
     if (message.supersededAt === undefined) {
+      if (message.role === 'user') {
+        items.push({ kind: 'turn', message });
+        debate = undefined;
+        if (parseDebateAddress(textOf(message)) !== undefined) {
+          debate = { kind: 'debate', opener: message, turns: [] };
+          items.push(debate);
+        }
+        continue;
+      }
+      if (debate !== undefined) {
+        debate.turns.push(message);
+        continue;
+      }
       items.push({ kind: 'turn', message });
       continue;
     }
@@ -366,8 +393,18 @@ export function ChatConversation({
     speakerNodeId === undefined || speakerNodeId === node.id
       ? undefined
       : speakers?.get(speakerNodeId);
-  const replying = otherSpeaker(convo.replyingNodeId);
+  // D405: while a debate on this thread has a turn under way, that turn's speaker is the one replying.
+  const debateProgress = useDebateProgress((state) =>
+    convo.threadId === undefined ? undefined : state.byThread[convo.threadId],
+  );
+  const debating = useDebateProgress((state) => runningDebate(state.byThread, convo.threadId));
+  const replyingNodeId = debating?.speakerNodeId ?? convo.replyingNodeId;
+  const replying = otherSpeaker(replyingNodeId);
   const replyName = replying?.name ?? node.name;
+  const nameOf = (nodeId?: string): string =>
+    nodeId === undefined || nodeId === node.id
+      ? node.name
+      : (speakers?.get(nodeId)?.name ?? 'an agent');
   // Any node's chat can write in the project (D302), so any turn that did offers its files.
   const agenticForge: AgenticForge | undefined =
     openInForge !== undefined && projectId !== undefined
@@ -390,7 +427,9 @@ export function ChatConversation({
   /** PG-2.4: undo choices the person cancelled — the failed turn stays, its buttons go. */
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
   const typing =
-    !stalled && (convo.awaitingReply || convo.streamingText.length > 0 || run.state === 'RUNNING');
+    !stalled &&
+    debating === undefined &&
+    (convo.awaitingReply || convo.streamingText.length > 0 || run.state === 'RUNNING');
   const hasStreamText = convo.streamingText.length > 0 || runText.length > 0;
   const busy = convo.awaitingReply || convo.sending;
 
@@ -601,6 +640,16 @@ export function ChatConversation({
         {itemsOf(convo.messages).map((item) =>
           item.kind === 'turn' ? (
             renderTurn(item.message, false)
+          ) : item.kind === 'debate' ? (
+            <DebateBlock
+              key={`debate-${item.opener.id}`}
+              turns={item.turns}
+              progress={
+                debateProgress?.userMessageId === item.opener.id ? debateProgress : undefined
+              }
+              nameOf={nameOf}
+              renderTurn={(message) => renderTurn(message, false)}
+            />
           ) : (
             <EarlierVersion
               key={`earlier-${item.messages[0]?.id ?? ''}`}

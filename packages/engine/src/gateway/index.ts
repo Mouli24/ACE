@@ -6,6 +6,7 @@ import {
   ChatEditRequestSchema,
   ChatRetryRequestSchema,
   ChatRequestSchema,
+  DebateRequestSchema,
   CreateProjectRequestSchema,
   CreateProviderRequestSchema,
   CreateMcpServerRequestSchema,
@@ -46,6 +47,7 @@ import {
   ChatNodeNotFoundError,
   ChatRunNotAvailableError,
   ChatTargetInvalidError,
+  ChatDebateUnavailableError,
   ChatThreadNodeMismatchError,
   ChatThreadNotFoundError,
   ChatApprovalNotFoundError,
@@ -390,7 +392,8 @@ function toChatHttpError(error: unknown): unknown {
     error instanceof ChatActionInvalidError ||
     error instanceof NotAnAgentNodeError ||
     error instanceof ChatThreadNodeMismatchError ||
-    error instanceof ChatTargetInvalidError
+    error instanceof ChatTargetInvalidError ||
+    error instanceof ChatDebateUnavailableError
   ) {
     return new HttpError('invalid_config', 'validation_failed', error.message);
   }
@@ -1055,6 +1058,17 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
       // 202: the reply streams over the socket as `chat.token` frames ending in `chat.message`;
       // `done` is deliberately not awaited — the chat service already logs its own failure (§2.3).
       const begun = await chat(c).chat(c.req.param('id'), request);
+      return c.json({ threadId: begun.threadId, messageId: begun.messageId }, 202);
+    } catch (error) {
+      throw toChatHttpError(error);
+    }
+  });
+
+  // D405: a debate answers 202 like a chat turn; its turns arrive as `chat.message`s on the thread.
+  api.post('/nodes/:id/debate', async (c) => {
+    const request = DebateRequestSchema.parse(await readJson(c));
+    try {
+      const begun = await chat(c).debate(c.req.param('id'), request);
       return c.json({ threadId: begun.threadId, messageId: begun.messageId }, 202);
     } catch (error) {
       throw toChatHttpError(error);

@@ -12,6 +12,7 @@ import {
   isConnectionAllowed,
   domainGraphIssues,
   nodeConfigPatchSchema,
+  validateDebateEdge,
   validateLoopConfig,
   validateOrderEdge,
   type CursorQuery,
@@ -566,6 +567,23 @@ function requireValidLoop(
   ]);
 }
 
+/**
+ * D405: refuse a debate the contract's `validateDebateEdge` refuses — a 400 naming why, as a loop's
+ * refusal is.
+ */
+function requireValidDebate(edge: Edge, nodeById: Map<Id, Node>): void {
+  const check = validateDebateEdge(edge, [...nodeById.values()]);
+  if (check.ok) return;
+  throw validationFailed(check.reason, [
+    {
+      severity: 'error',
+      code: check.code,
+      message: check.reason,
+      edgeId: edge.id,
+    } satisfies ValidationIssue,
+  ]);
+}
+
 async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
   const { tx, scope, workflowId, nodeById, edgeById } = ctx;
 
@@ -625,6 +643,15 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
 
       await tx.edges.deleteByNode(scope, op.nodeId);
       await tx.nodes.delete(scope, op.nodeId);
+
+      // D405: a debate this node judged goes on without a judge rather than naming a missing one.
+      for (const edge of [...edgeById.values()]) {
+        if (edge.debate?.judgeNodeId !== op.nodeId) continue;
+        const { judgeNodeId: _gone, ...debate } = edge.debate;
+        const updated: Edge = { ...edge, debate };
+        edgeById.set(updated.id, updated);
+        await tx.edges.update(scope, updated);
+      }
       return;
     }
 
@@ -689,6 +716,7 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
           } satisfies ValidationIssue,
         ]);
       }
+      requireValidDebate(edge, nodeById);
 
       edgeById.set(edge.id, edge);
       await tx.edges.insert(scope, edge);
@@ -698,11 +726,20 @@ async function applyOp(op: GraphOp, ctx: OpContext): Promise<void> {
     case 'update_edge': {
       const current = edgeById.get(op.edgeId);
       if (current === undefined) throw unknownRef('Edge', op.edgeId);
-      // `EdgePatch` carries nothing but `loop`, so a patch without one has nothing to apply.
-      if (op.patch.loop === undefined) return;
+      // `EdgePatch` carries `loop` and (D405) `debate`; a patch with neither has nothing to apply.
+      if (op.patch.loop === undefined && op.patch.debate === undefined) return;
 
-      const updated: Edge = { ...current, loop: op.patch.loop };
-      requireValidLoop(updated, nodeById, edgeById);
+      let updated: Edge = current;
+      if (op.patch.loop !== undefined) {
+        updated = { ...updated, loop: op.patch.loop };
+        requireValidLoop(updated, nodeById, edgeById);
+      }
+      if (op.patch.debate !== undefined) {
+        // `null` turns the debate off; the edge is a plain connection again.
+        const { debate: _was, ...plain } = updated;
+        updated = op.patch.debate === null ? plain : { ...plain, debate: op.patch.debate };
+        requireValidDebate(updated, nodeById);
+      }
 
       edgeById.set(updated.id, updated);
       await tx.edges.update(scope, updated);

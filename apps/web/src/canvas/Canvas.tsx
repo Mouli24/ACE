@@ -1,4 +1,12 @@
-import type { Edge, GraphOp, LoopConfig, Node, Port } from '@ace/contracts';
+import type {
+  DebateConfig,
+  DebateRole,
+  Edge,
+  GraphOp,
+  LoopConfig,
+  Node,
+  Port,
+} from '@ace/contracts';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -6,6 +14,10 @@ import {
   ContextMenuSeparator,
   ContextMenuShortcut,
   ContextMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Icons,
   MENU_CONTENT_CLASS,
   cn,
@@ -48,6 +60,7 @@ import { useFollowNode } from '../app/follow-node';
 import { useSelectionStore } from '../app/stores/selection';
 import { useViewportStore } from '../app/stores/viewport';
 import { useResolvedTheme } from '../app/theme';
+import { debateMenuFor, type DebateMenu } from '../edges/debate';
 import { loopEdgeType } from '../edges/loop/LoopEdge';
 import { MakeLoopEdgeDialog, type LoopEdgeCandidate } from '../edges/loop/MakeLoopEdgeDialog';
 import { canBeLoopEdge } from '../edges/loop/can-be-loop-edge';
@@ -153,6 +166,18 @@ import {
 
 /** Both edge renderers: the typed data edge, and round 3's loop edge (FR-CON-007). */
 const aceEdgeTypes = { ...edgeTypes, ...loopEdgeType };
+
+/** D406: what Add node offers — an Agent, or one of the preset debaters. */
+const ADD_NODE_CHOICES: ReadonlyArray<{ label: string; hint: string; preset?: DebateRole }> = [
+  { label: 'Agent', hint: 'A node you give a goal and a model.' },
+  {
+    label: 'Defender',
+    hint: 'Writes the answer in a debate, and keeps it right.',
+    preset: 'defender',
+  },
+  { label: 'Attacker', hint: 'Finds what is wrong with the answer.', preset: 'attacker' },
+  { label: 'Judge', hint: 'Decides the debate and writes the final answer.', preset: 'judge' },
+];
 
 export interface CanvasProps {
   workflowId: string;
@@ -1300,6 +1325,14 @@ function CanvasInner({
       }
       editor.edit(fresh.ops, `Change connection to ${option.type}`);
     },
+    debate: (edgeId: string): DebateMenu => debateMenuFor(nodes, edges, edgeId),
+    setDebate: (edgeId: string, debate: DebateConfig | null) => {
+      if (readOnly) return;
+      editor.edit(
+        [{ op: 'update_edge', edgeId, patch: { debate } }],
+        debate === null ? 'Stop debating' : 'Debate',
+      );
+    },
     remove: (edgeId: string) => {
       setHoveredEdgeId(undefined);
       deleteElements([], [edgeId]);
@@ -1321,6 +1354,8 @@ function CanvasInner({
     () => ({
       typeOptions: (edgeId) => edgeEditRef.current.typeOptions(edgeId),
       pickType: (edgeId, option) => edgeEditRef.current.pickType(edgeId, option),
+      debate: (edgeId) => edgeEditRef.current.debate(edgeId),
+      setDebate: (edgeId, debate) => edgeEditRef.current.setDebate(edgeId, debate),
       remove: (edgeId) => edgeEditRef.current.remove(edgeId),
       select: (edgeId) => edgeEditRef.current.select(edgeId),
       hover: (edgeId) => hoverEdge(edgeId),
@@ -1429,21 +1464,30 @@ function CanvasInner({
    * The theme's "Add node" (D332): an Agent after the last stage, linked to it, as one undo step;
    * then selected, its settings opened and the view centred on it.
    */
-  const addStage = useCallback(() => {
-    if (readOnly) return;
-    // PG-1.3 (D351): provider, then model, then the node — nothing is sent before both are chosen.
-    requestProviderChoice({
-      onChosen: (choice) => {
-        const plan = planNewStage({ nodes, edges, workflowId, choice });
-        editor.edit(plan.ops, 'Add node');
-        selectWhenAdded([plan.node.id]);
-        usePanelsStore.getState().openSettings({ kind: 'node', id: plan.node.id });
-        const { cw, ch } = canvasSize();
-        const { x, y } = plan.node.position;
-        void flow.setViewport(centreOn(flow.getViewport(), x + 105, y + 140, cw, ch));
-      },
-    });
-  }, [readOnly, nodes, edges, workflowId, editor, selectWhenAdded, canvasSize, flow]);
+  const addStage = useCallback(
+    (preset?: DebateRole) => {
+      if (readOnly) return;
+      // PG-1.3 (D351): provider, then model, then the node — nothing is sent before both are chosen.
+      requestProviderChoice({
+        onChosen: (choice) => {
+          const plan = planNewStage({
+            nodes,
+            edges,
+            workflowId,
+            choice,
+            ...(preset === undefined ? {} : { preset }),
+          });
+          editor.edit(plan.ops, 'Add node');
+          selectWhenAdded([plan.node.id]);
+          usePanelsStore.getState().openSettings({ kind: 'node', id: plan.node.id });
+          const { cw, ch } = canvasSize();
+          const { x, y } = plan.node.position;
+          void flow.setViewport(centreOn(flow.getViewport(), x + 105, y + 140, cw, ch));
+        },
+      });
+    },
+    [readOnly, nodes, edges, workflowId, editor, selectWhenAdded, canvasSize, flow],
+  );
 
   /** The nodes an action applies to: the selection, or the right-clicked node when outside it. */
   const targetIds = useCallback(
@@ -2103,21 +2147,42 @@ function CanvasInner({
                 )}
 
                 {!readOnly && (
-                  <button
-                    type="button"
-                    data-testid="new-node-button"
-                    title="Add an agent node"
-                    onClick={addStage}
-                    className="absolute right-[16px] top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--surface)] py-0 pl-[6px] pr-[16px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] hover:shadow-[0_12px_30px_-12px_rgba(239,107,63,0.45)] focus-visible:border-[var(--focus)]"
-                  >
-                    <span
-                      aria-hidden
-                      className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-[#ef6b3f] text-[16px] leading-none text-[#fff] shadow-[0_0_0_3px_rgba(239,107,63,0.15)]"
-                    >
-                      +
-                    </span>
-                    Add node
-                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        data-testid="new-node-button"
+                        title="Add a node"
+                        className="absolute right-[16px] top-[12px] z-[5] flex h-[34px] cursor-pointer items-center gap-[8px] whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--surface)] py-0 pl-[6px] pr-[16px] text-[12.5px] font-semibold text-[var(--ink)] shadow-[0_10px_26px_-14px_rgba(40,25,15,0.45)] outline-none hover:border-[#ef6b3f] hover:shadow-[0_12px_30px_-12px_rgba(239,107,63,0.45)] focus-visible:border-[var(--focus)]"
+                      >
+                        <span
+                          aria-hidden
+                          className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-[#ef6b3f] text-[16px] leading-none text-[#fff] shadow-[0_0_0_3px_rgba(239,107,63,0.15)]"
+                        >
+                          +
+                        </span>
+                        Add node
+                      </button>
+                    </DropdownMenuTrigger>
+                    {/* D406: an Agent, or one of the preset debaters. */}
+                    <DropdownMenuContent align="end" data-testid="new-node-menu">
+                      {ADD_NODE_CHOICES.map((choice) => (
+                        <DropdownMenuItem
+                          key={choice.label}
+                          data-testid={`new-node-${choice.preset ?? 'agent'}`}
+                          className="h-auto min-h-8 items-start py-[6px]"
+                          onSelect={() => addStage(choice.preset)}
+                        >
+                          <span className="flex min-w-0 flex-col">
+                            <span className="font-medium">{choice.label}</span>
+                            <span className="max-w-[240px] whitespace-normal text-[11px] leading-[1.35] text-[var(--muted)]">
+                              {choice.hint}
+                            </span>
+                          </span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
 
                 <CanvasToolbar

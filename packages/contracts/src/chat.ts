@@ -298,6 +298,12 @@ export const WORKFLOW_ADDRESS = 'workflow';
 const LEADING_JOINER = /^[\s,:;.\-–—]+/u;
 
 /**
+ * D405: `@debate`: the chat's address for a debate between the node and the one its debate edge
+ * joins it to, rather than one node's answer.
+ */
+export const DEBATE_ADDRESS = 'debate';
+
+/**
  * Whether a chat message is for the whole workflow: its first `@`-address — by the chat's own
  * reading (code, scoped packages, decorators and quoted `@`s are never addresses) — is `@workflow`,
  * in any case. `task` is the message without that token: the run's goal. `undefined` when the
@@ -305,6 +311,18 @@ const LEADING_JOINER = /^[\s,:;.\-–—]+/u;
  * `@workflow` wins over a node whose handle happens to be `workflow`.
  */
 export function parseWorkflowAddress(text: string): { task: string } | undefined {
+  return parseSpecialAddress(text, WORKFLOW_ADDRESS);
+}
+
+/**
+ * D405: whether a chat message asks for a debate — its first `@`-address is `@debate`, read as
+ * `@workflow` is. `task` is what the debaters argue over.
+ */
+export function parseDebateAddress(text: string): { task: string } | undefined {
+  return parseSpecialAddress(text, DEBATE_ADDRESS);
+}
+
+function parseSpecialAddress(text: string, address: string): { task: string } | undefined {
   const kept = chatAddressText(text);
   for (const match of kept.matchAll(AT_TOKEN)) {
     const start = match.index;
@@ -312,7 +330,7 @@ export function parseWorkflowAddress(text: string): { task: string } | undefined
     // An `@` inside a word (an email address) is not an address, as in Domain's parser.
     if (before !== undefined && /[\p{L}\p{N}_.-]/u.test(before)) continue;
     const handle = match[0].slice(1).replace(/-+$/, '').toLowerCase();
-    if (handle !== WORKFLOW_ADDRESS) return undefined;
+    if (handle !== address) return undefined;
     const end = start + match[0].length;
     const head = text.slice(0, start).trimEnd();
     const tail = text.slice(end).replace(LEADING_JOINER, '');
@@ -321,6 +339,18 @@ export function parseWorkflowAddress(text: string): { task: string } | undefined
   }
   return undefined;
 }
+
+/**
+ * D405: `POST /nodes/:id/debate` → 202 `{ threadId, messageId }`, as a chat turn. `content` is the
+ * person's message as typed, `@debate` and all; it is stored as their turn. The debaters' turns
+ * arrive as `chat.message`s on the thread, each with its speaker, and `chat.debate` says how far
+ * the debate has got.
+ */
+export const DebateRequestSchema = z.strictObject({
+  threadId: IdSchema.optional(),
+  content: z.array(PartSchema).min(1),
+});
+export type DebateRequest = z.infer<typeof DebateRequestSchema>;
 
 /**
  * `POST /nodes/:id/chat` → 202 `{ threadId, messageId }` (§2.3). The answer comes back over the

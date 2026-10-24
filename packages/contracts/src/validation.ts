@@ -183,6 +183,17 @@ export const AGENTIC_VALIDATION_ISSUE_CODES = [
  */
 export const COST_VALIDATION_ISSUE_CODES = ['unpriced_model_under_cap'] as const;
 
+/**
+ * D405: why a debate edge is refused — `debate_not_data_edge`: only a data connection debates;
+ * `debate_needs_agents`: both ends must be Agent or Model nodes; `debate_judge_invalid`: the judge is
+ * not an Agent or Model node of this workflow, or is one of the two debaters.
+ */
+export const DEBATE_VALIDATION_ISSUE_CODES = [
+  'debate_not_data_edge',
+  'debate_needs_agents',
+  'debate_judge_invalid',
+] as const;
+
 export const VALIDATION_ISSUE_CODES = [
   ...ROUND_1_VALIDATION_ISSUE_CODES,
   ...ROUND_2_VALIDATION_ISSUE_CODES,
@@ -193,6 +204,7 @@ export const VALIDATION_ISSUE_CODES = [
   ...RUN_ORDER_VALIDATION_ISSUE_CODES,
   ...AGENTIC_VALIDATION_ISSUE_CODES,
   ...COST_VALIDATION_ISSUE_CODES,
+  ...DEBATE_VALIDATION_ISSUE_CODES,
 ] as const;
 export const ValidationIssueCodeSchema = z.enum(VALIDATION_ISSUE_CODES);
 export type ValidationIssueCode = z.infer<typeof ValidationIssueCodeSchema>;
