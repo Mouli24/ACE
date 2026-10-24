@@ -20,6 +20,7 @@ import {
   type ProviderStatus,
   type StreamChunk,
 } from '../../adapter.js';
+import { APPROVAL_WAIT_MS, startApprovalBridge, type ApprovalBridge } from './approval-bridge.js';
 import { parseJsonLine } from './lines.js';
 import { resolveCommand, type ResolvedCommand } from './resolve.js';
 import { runCli, type CliExit } from './runner.js';
@@ -41,6 +42,9 @@ export interface CliParser {
 /** What a node asks of a CLI (D383): the `GenerateRequest.cliAccess` the adapter honours. */
 export type CliAccess = NonNullable<GenerateRequest['cliAccess']>;
 
+/** D403: the approval bridge as the CLI is pointed at it (`./approval-bridge.ts`). */
+export type CliApprovalBridge = Pick<ApprovalBridge, 'configPath' | 'toolName'>;
+
 export interface CliDialect {
   type: CliProviderType;
   /** The command on PATH. */
@@ -48,10 +52,22 @@ export interface CliDialect {
   /** How messages name it. */
   label: string;
   /**
+   * D403: the CLI can hand a permission it would ask for to an MCP tool mid-call, so at
+   * `edit_commands` a command outside the allowed list goes to the person instead of being refused.
+   */
+  asksForCommands?: boolean;
+  /**
    * `access` is the node's own level (D383), given only for `read_only`, `edit_files` and
    * `edit_commands`, and only when there is a project folder; absent, `permission` is the preset.
+   * `bridge` is given only at `edit_commands`, to a dialect that `asksForCommands`, when the engine
+   * can ask the person (`GenerateRequest.approveCommand`).
    */
-  args(req: GenerateRequest, permission: CliPermission, access?: CliAccess): string[];
+  args(
+    req: GenerateRequest,
+    permission: CliPermission,
+    access?: CliAccess,
+    bridge?: CliApprovalBridge,
+  ): string[];
   stdin(req: GenerateRequest): string;
   env?(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
   createParser(): CliParser;
@@ -200,11 +216,21 @@ export function createCliAdapter(dialect: CliDialect, options: CliAdapterOptions
             ? req.cliAccess
             : undefined;
 
+        // D403: at `edit_commands`, a command outside the allowed list is put to the person.
+        const bridge =
+          access?.access === 'edit_commands' &&
+          dialect.asksForCommands === true &&
+          req.approveCommand !== undefined
+            ? await startApprovalBridge(req.approveCommand)
+            : undefined;
+        const baseEnv = dialect.env?.(env) ?? env;
+
         const run = runCli({
           command: command.command,
-          args: [...command.prefixArgs, ...dialect.args(req, permission, access)],
+          args: [...command.prefixArgs, ...dialect.args(req, permission, access, bridge)],
           cwd,
-          env: dialect.env?.(env) ?? env,
+          // An approval waits on a person: the CLI must not give up on its tool call first.
+          env: bridge === undefined ? baseEnv : { ...baseEnv, MCP_TOOL_TIMEOUT: String(APPROVAL_WAIT_MS) },
           stdin: dialect.stdin(req),
           signal,
           platform,
@@ -231,6 +257,7 @@ export function createCliAdapter(dialect: CliDialect, options: CliAdapterOptions
           // Once the CLI has acted it may have changed files: running it again is not a retry (§5.2).
           throw new ProviderCallError(acted ? { ...nodeError, retryable: false } : nodeError);
         } finally {
+          bridge?.close();
           if (scratch !== undefined) {
             try {
               rmSync(scratch, { recursive: true, force: true, maxRetries: 3 });

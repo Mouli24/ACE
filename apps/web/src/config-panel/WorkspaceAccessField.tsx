@@ -6,6 +6,7 @@ import {
   WORKSPACE_ACCESS,
   agentWorkspaceOf,
   isCliProviderType,
+  isImageGenerationModel,
   type AgentConfig,
   type AgentWorkspace,
   type CliProviderType,
@@ -43,7 +44,8 @@ const CLI_LEVELS: Readonly<
   Record<CliProviderType, Partial<Record<WorkspaceAccess, { note?: string; unavailable?: string }>>>
 > = {
   claude_code: {
-    edit_commands: { note: "Runs only the commands you've always-allowed; others are refused." },
+    // D403: Claude Code asks through ACE's approval card, as an API model does.
+    edit_commands: { note: "Asks you before each command you haven't always-allowed." },
   },
   codex_cli: {
     edit_files: { note: 'Codex also runs commands inside its sandbox.' },
@@ -233,9 +235,11 @@ export function WorkspaceAccessField({
   const model = (models.data?.items ?? []).find(
     (each) => each.providerId === config.providerId && each.modelId === config.modelId,
   );
-  const noTools = cliType === undefined && model?.supportsTools === false;
+  // D402: an image model draws in one call; the folder is not its to work in.
+  const drawsImages = config.modelId !== undefined && isImageGenerationModel(config.modelId);
+  const noTools = cliType === undefined && model?.supportsTools === false && !drawsImages;
   const noFolder = project.data !== undefined && project.data.folderPath.trim() === '';
-  const disabled = noTools || noFolder;
+  const disabled = noTools || noFolder || drawsImages;
   const set = (patch: Partial<AgentWorkspace>) => {
     const next: AgentWorkspace = { ...workspace, ...patch };
     if (next.tokenBudget === undefined) delete next.tokenBudget;
@@ -292,7 +296,12 @@ export function WorkspaceAccessField({
           <Link to="/providers">Turn tools on for it in Providers</Link> if it can.
         </p>
       )}
-      {!noTools && noFolder && (
+      {drawsImages && (
+        <p role="note" data-testid="workspace-image-model" className={HELP_CLASS}>
+          An image model draws in one call, so workspace access does not apply to it.
+        </p>
+      )}
+      {!noTools && !drawsImages && noFolder && (
         <p role="note" data-testid="workspace-no-folder" className={HELP_CLASS}>
           Give the project a folder first.
         </p>

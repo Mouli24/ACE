@@ -1,6 +1,7 @@
 import {
   isAgentic,
   isCliProviderType,
+  isImageGenerationModel,
   type DataType,
   type Edge,
   type Id,
@@ -242,6 +243,8 @@ function agenticIssues(
     const { providerId, modelId } = node.config;
     const provider = providerId === undefined ? undefined : providersById.get(providerId);
     if (provider !== undefined && isCliProviderType(provider.type)) continue;
+    // D402: an image model draws in one call and never works in the folder (the executor agrees).
+    if (modelId !== undefined && isImageGenerationModel(modelId)) continue;
 
     const model = input.models.find(
       (candidate) => candidate.providerId === providerId && candidate.modelId === modelId,

@@ -1109,8 +1109,8 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
 
   const decideChatApproval = (kind: 'approve' | 'reject') => async (c: Context) => {
     const { note, always } = ApprovalDecisionRequestSchema.parse(await readJson(c));
-    // D376: Always allow saves an agentic node's command prefix; a chat asks about no command.
-    if (always === true) throw cannotAlwaysAllow(CANNOT_ALWAYS_ALLOW);
+    // D376: Always allow saves an agentic node's command prefix — in a chat, a CLI's command (D403).
+    if (always === true && kind === 'reject') throw cannotAlwaysAllow(CANNOT_ALWAYS_ALLOW);
     try {
       return c.json(
         await chat(c).decideApproval(
@@ -1118,6 +1118,7 @@ export function createEngineApp(deps: EngineDeps): EngineApp {
           c.req.param('requestId') ?? '',
           kind,
           note,
+          always,
         ),
       );
     } catch (error) {

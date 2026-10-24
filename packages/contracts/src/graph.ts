@@ -270,8 +270,32 @@ export function outputTypesWithSchema(
 export function effectiveOutputTypes(config: {
   readonly outputTypes: readonly DataType[];
   readonly outputContract?: { readonly jsonSchema?: Record<string, unknown> | undefined } | undefined;
+  readonly modelId?: string | undefined;
 }): DataType[] {
-  return outputTypesWithSchema(config.outputTypes, config.outputContract?.jsonSchema);
+  const types = outputTypesWithSchema(config.outputTypes, config.outputContract?.jsonSchema);
+  // D402: an image model answers a text node with its picture beside a short text note.
+  if (
+    config.modelId !== undefined &&
+    isImageGenerationModel(config.modelId) &&
+    types.length === 1 &&
+    types[0] === 'text'
+  ) {
+    return ['text', 'image'];
+  }
+  return types;
+}
+
+/**
+ * D402: the image-generation models ACE can call — OpenAI's `gpt-image-*` / `chatgpt-image-*` /
+ * `dall-e-*`, and Gemini's `gemini-*-image*` — read off the provider-side id, bare or behind a
+ * gateway's vendor prefix. Only the OpenAI and Google adapters serve them; any other provider keeps
+ * such a model unavailable.
+ */
+const IMAGE_GENERATION_MODEL =
+  /^(?:gpt-image-|chatgpt-image-|dall-e-|gemini-[\w.-]*-image(?:$|-))/i;
+
+export function isImageGenerationModel(modelId: string): boolean {
+  return IMAGE_GENERATION_MODEL.test(modelId.replace(/^[^/]+\//, ''));
 }
 
 /** The `outputContract.jsonSchema` an agent config carries, read from any node's config. */

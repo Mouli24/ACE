@@ -6,6 +6,7 @@ import {
   cliExitError,
   cliModel,
   createCliAdapter,
+  type CliApprovalBridge,
   summariseToolOutput,
   tokenCount,
   type CliAccess,
@@ -17,13 +18,16 @@ import { listClaudeCodeModels } from './claude-models.js';
 
 /**
  * D383: the node's own level, from `claude --help` (`--permission-mode`, `--tools`,
- * `--allowedTools`). `edit_commands` adds `Bash` to `--tools` and runs under `dontAsk`, which refuses
- * whatever is not pre-approved (print mode cannot ask): `Edit` and `Write` are pre-approved, and so
- * is one `Bash(<prefix>:*)` rule per allowed prefix. A command outside the list is refused by the
- * CLI; with an empty allowlist the node behaves as `edit_files` plus a refused `Bash`. A prefix
+ * `--allowedTools`). `edit_commands` adds `Bash` to `--tools`: `Edit` and `Write` are pre-approved,
+ * and so is one `Bash(<prefix>:*)` rule per allowed prefix. Without a bridge it runs under `dontAsk`,
+ * which refuses whatever is not pre-approved (print mode cannot ask) — with an empty allowlist, every
+ * command but the CLI's own read-only ones. A prefix
  * holding a parenthesis or line break could widen or break a rule, so it is skipped (fewer permissions).
+ *
+ * D403: with an approval `bridge` the CLI asks instead of refusing — `default` mode, with every
+ * permission it would ask for sent to the bridge's tool, which puts a command to the person.
  */
-export function claudeAccessArgs(access: CliAccess): string[] {
+export function claudeAccessArgs(access: CliAccess, bridge?: CliApprovalBridge): string[] {
   if (access.access === 'read_only') return [...PERMISSION_ARGS.read_only];
   if (access.access === 'edit_files') return [...EDIT_FILES_ARGS];
   const rules = access.allowedCommands
@@ -32,7 +36,7 @@ export function claudeAccessArgs(access: CliAccess): string[] {
     .map((prefix) => `Bash(${prefix}:*)`);
   return [
     '--permission-mode',
-    'dontAsk',
+    bridge === undefined ? 'dontAsk' : 'default',
     '--tools',
     'Read,Edit,Write,Grep,Glob,Bash',
     '--allowedTools',
@@ -40,6 +44,9 @@ export function claudeAccessArgs(access: CliAccess): string[] {
     '--allowedTools',
     'Write',
     ...rules.flatMap((rule) => ['--allowedTools', rule]),
+    ...(bridge === undefined
+      ? []
+      : ['--mcp-config', bridge.configPath, '--permission-prompt-tool', bridge.toolName]),
   ];
 }
 
@@ -281,9 +288,11 @@ export const claudeCodeDialect: CliDialect = {
   type: 'claude_code',
   bin: 'claude',
   label: 'Claude Code',
-  args: (req, permission, access) => [
+  // D403: `--permission-prompt-tool` lets it ask about a command mid-call.
+  asksForCommands: true,
+  args: (req, permission, access, bridge) => [
     ...CLAUDE_CODE_BASE_ARGS,
-    ...(access === undefined ? PERMISSION_ARGS[permission] : claudeAccessArgs(access)),
+    ...(access === undefined ? PERMISSION_ARGS[permission] : claudeAccessArgs(access, bridge)),
     ...(req.modelId === 'default' ? [] : ['--model', req.modelId]),
     // D389: Claude Code 2.1.304's `--effort` takes all five levels as they are; unset, none is sent.
     ...(req.reasoningEffort === undefined ? [] : ['--effort', req.reasoningEffort]),

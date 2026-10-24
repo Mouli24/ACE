@@ -6,6 +6,7 @@ import {
   embedOpenAiStyle,
   getJson,
   statusFromProbe,
+  withImageGeneration,
   type FetchLike,
 } from './ai-sdk.js';
 import { openAiApiRoot, parseOpenAiModelList } from './openai-compatible.js';
@@ -40,8 +41,11 @@ export function createOpenAiAdapter(options: OpenAiOptions): ProviderAdapter {
   return createAiSdkAdapter({
     type: 'openai',
     model: (modelId) => provider.chat(modelId),
+    // D402: `gpt-image-*`, `chatgpt-image-*` and `dall-e-*` answer on the images endpoint.
+    image: (modelId) => provider.image(modelId),
     check: () => statusFromProbe(probe),
-    listModels: async (): Promise<ModelInfo[]> => parseOpenAiModelList(await probe()),
+    listModels: async (): Promise<ModelInfo[]> =>
+      parseOpenAiModelList(await probe()).map(withImageGeneration),
     embed: (texts, embedOptions) =>
       embedOpenAiStyle(
         apiRoot,

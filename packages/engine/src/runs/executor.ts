@@ -6,6 +6,7 @@ import {
   effectiveOutputTypes,
   isAgentic,
   isCliProviderType,
+  isImageGenerationModel,
   validateAgainstContract,
   type Envelope,
   type EnvelopeContract,
@@ -37,6 +38,7 @@ import { newId } from '../ids.js';
 import type { Logger } from '../logging/index.js';
 import type {
   AgentTurn,
+  CommandApproval,
   ModelRouter,
   ProducedPart,
   ProviderAdapter,
@@ -77,6 +79,7 @@ import {
   agentSystemPrompt,
   backgroundProcessOf,
   checkLimits,
+  DENIED_COMMAND_ERROR,
   deniedCommandResult,
   elideTurns,
   newAgentLoopState,
@@ -592,6 +595,10 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
   ): Promise<undefined | { failed: NodeError } | { state: AgentLoopState; workspaceRoot: string }> {
     const node = input.node;
     if (node.kind !== 'agent' || !isAgentic(node.config) || input.replay !== undefined) {
+      return undefined;
+    }
+    // D402: an image model draws in one call — it has no tools to work in the folder with.
+    if (node.config.modelId !== undefined && isImageGenerationModel(node.config.modelId)) {
       return undefined;
     }
     const providerId = node.config.providerId;
@@ -1287,6 +1294,40 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
           }
         }
 
+        /**
+         * D403: a command a coding-agent CLI wants to run at Edit + commands that its allowed
+         * commands do not cover. It goes through the tool point as an API model's `run_command`
+         * does — the policy's destructive-action check puts it to the person, with Always allow —
+         * and a denial goes back to the CLI for the model to read. The CLI runs the command and
+         * reports it itself (`activity`); the person's wait counts against the CLI's clock.
+         */
+        async function approveCliCommand(command: string): Promise<CommandApproval> {
+          const registered = deps.tools?.get('run_command');
+          if (registered === undefined || input.guardrails?.beforeTool === undefined) {
+            return { allow: false, message: 'ACE cannot ask about commands here, so it did not run.' };
+          }
+          const step = await input.guardrails.beforeTool({
+            definition: registered.definition,
+            args: { command },
+            enabledTools: ['run_command'],
+            sandboxDir,
+            allowedDomains,
+          });
+          verdicts.push(...(step.verdicts ?? []));
+          if (step.kind === 'allow') return { allow: true };
+          if (step.kind === 'reject' && step.command === true) {
+            const said = step.note?.trim();
+            return {
+              allow: false,
+              message:
+                said === undefined || said === ''
+                  ? DENIED_COMMAND_ERROR
+                  : `${DENIED_COMMAND_ERROR} They said: ${said}`,
+            };
+          }
+          return { allow: false, message: `ACE's guardrails stopped this command: ${step.reason}` };
+        }
+
         /** One generate() call, streamed to the end; the tools it asked for, if any. */
         async function generateTurn(
           withResults: boolean,
@@ -1351,6 +1392,10 @@ export function createNodeExecutor(deps: NodeExecutorDeps): NodeExecutor {
                           agentWorkspaceOf(input.node.config).allowedCommands),
                       ],
                     },
+                    // D403: at Edit + commands, a command outside that list is put to the person.
+                    ...(agentWorkspaceOf(input.node.config).access === 'edit_commands'
+                      ? { approveCommand: approveCliCommand }
+                      : {}),
                   }
                 : {}),
               ...(offerTools ? { tools: offeredTools } : {}),

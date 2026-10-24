@@ -392,3 +392,58 @@ export function assemblePrompt(input: AssemblePromptInput): AssembledPrompt {
     system: SYSTEM_BASE_TEXT,
   };
 }
+
+/**
+ * D402: what an image model is asked to draw, out of an assembled prompt. An image model reads every
+ * word as part of the picture, so the node's frame — the system text, the untrusted-block labels, the
+ * output contract — is left out. What stays: the node's instructions, what the person said in a
+ * chat (their turns only, oldest first, so "now make it blue" still knows what "it" is) and the
+ * input from upstream. A prompt with none of those is sent as it is.
+ */
+export function imagePromptFrom(text: string): string {
+  const sections = new Map<string, string>();
+  let header: string | undefined;
+  let body: string[] = [];
+  const close = () => {
+    if (header !== undefined) sections.set(header, body.join('\n').trim());
+  };
+  for (const line of text.split('\n')) {
+    if (/^## \S/.test(line)) {
+      close();
+      header = line.trim();
+      body = [];
+    } else {
+      body.push(line);
+    }
+  }
+  close();
+
+  const withoutLabels = (section: string): string =>
+    section
+      .split('\n')
+      .filter(
+        (line, index, lines) => line !== UNTRUSTED_LABEL && lines[index + 1] !== UNTRUSTED_LABEL,
+      )
+      .join('\n')
+      .trim();
+
+  const said: string[] = [];
+  let speaking = false;
+  for (const line of (sections.get(CONVERSATION_SECTION) ?? '').split('\n')) {
+    if (line.startsWith('User: ')) {
+      speaking = true;
+      said.push(line.slice('User: '.length));
+    } else if (line.startsWith('Assistant')) {
+      speaking = false;
+    } else if (speaking) {
+      said[said.length - 1] += `\n${line}`;
+    }
+  }
+
+  const kept = [
+    sections.get('## Instructions') ?? '',
+    said.join('\n').trim(),
+    withoutLabels(sections.get('## Input') ?? ''),
+  ].filter((part) => part !== '');
+  return kept.length === 0 ? text.trim() : kept.join('\n\n');
+}

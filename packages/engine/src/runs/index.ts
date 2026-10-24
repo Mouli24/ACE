@@ -1,6 +1,7 @@
 import {
   allowedRunActions,
   DEFAULT_CONCURRENCY,
+  effectiveOutputTypes,
   envelopeUsedTokens,
   estimateTokens,
   ENVELOPE_SUMMARY_MAX,
@@ -577,8 +578,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
       to.kind === 'agent'
         ? Math.max(1, Math.floor(readsBudgetFor(to) / Math.max(1, feeders)))
         : Number.MAX_SAFE_INTEGER;
+    // D402: the types the node is held to — an image model's node answers with an image too.
     const outputTypes =
-      to.kind === 'agent' || to.kind === 'model' ? to.config.outputTypes : ['text' as const];
+      to.kind === 'agent' || to.kind === 'model'
+        ? effectiveOutputTypes(to.config)
+        : ['text' as const];
 
     // The receiving node's own model summarises for it (round 5 §2.5, F3), cancelled with the run
     // when the caller has the run's signal to hand.

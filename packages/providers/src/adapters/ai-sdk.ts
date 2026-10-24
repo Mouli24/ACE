@@ -1,10 +1,12 @@
-import type { ProviderType, ToolDefinition } from '@ace/contracts';
-import { toolResultBlock } from '@ace/engine';
+import { isImageGenerationModel, type ProviderType, type ToolDefinition } from '@ace/contracts';
+import { imagePromptFrom, newId, toolResultBlock } from '@ace/engine';
 import {
   Output,
+  generateImage,
   jsonSchema,
   streamText,
   tool,
+  type ImageModel,
   type JSONValue,
   type LanguageModel,
   type ModelMessage,
@@ -126,6 +128,24 @@ export function notAChatModel(model: ModelInfo): ModelInfo {
 /** The model as its name describes it: unavailable when the name says it does not chat. */
 export function byChatName(model: ModelInfo): ModelInfo {
   return NON_CHAT_NAME.test(model.modelId) ? notAChatModel(model) : model;
+}
+
+/**
+ * D402: an image-generation model, for a provider whose adapter can call it (OpenAI, Google). It
+ * reads text and answers with an image beside a short text note, so a node keeps its text edge. It
+ * calls no tools and holds to no schema; it is unpriced until the manifest says otherwise.
+ */
+export function withImageGeneration(model: ModelInfo): ModelInfo {
+  if (!isImageGenerationModel(model.modelId)) return model;
+  const { unavailableReason: _notAChat, ...rest } = model;
+  return {
+    ...rest,
+    available: true,
+    inputTypes: ['text'],
+    outputTypes: ['text', 'image'],
+    supportsTools: false,
+    supportsJson: false,
+  };
 }
 
 /** The AI SDK's finish reasons, narrowed to ours (Arch §14.2). */
@@ -354,6 +374,12 @@ export interface AiSdkAdapterOptions {
   type: ProviderType;
   /** Builds the AI SDK model handle for one model id. */
   model: (modelId: string) => LanguageModel;
+  /**
+   * D402: builds the AI SDK image model for an image-generation model id
+   * (`isImageGenerationModel`). Absent, such a model is called like any other and refused by the
+   * provider.
+   */
+  image?: (modelId: string) => ImageModel;
   check: () => Promise<ProviderStatus>;
   listModels: () => Promise<ModelInfo[]>;
   embed?: (texts: string[], options?: EmbedOptions) => Promise<number[][]>;
@@ -533,6 +559,79 @@ export function messagesFor(
   return messages;
 }
 
+/** D402: the longest prompt each image model takes, in characters; others take OpenAI's 32 000. */
+function imagePromptLimit(modelId: string): number {
+  if (/dall-e-2/i.test(modelId)) return 1_000;
+  if (/dall-e-3/i.test(modelId)) return 4_000;
+  return 32_000;
+}
+
+const EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
+
+/**
+ * D402: one call to an image model. The images come back as `part` chunks with their bytes beside
+ * them, which the engine stores as artifacts and hands on as references (FR-MM-003, FR-MM-004) —
+ * the same path `mock-media` takes. A short note goes out as text too: streamed, so a chat shows it,
+ * and as a text part when the node's contract asks for text. The images are the whole answer, so
+ * the executor's output is exactly these parts.
+ */
+async function* generateImages(
+  model: ImageModel,
+  req: GenerateRequest,
+  signal: AbortSignal,
+): AsyncGenerator<StreamChunk> {
+  try {
+    const prompt = imagePromptFrom(req.prompt).slice(0, imagePromptLimit(req.modelId));
+    // ACE owns the retry policy (Arch §28): the SDK re-sending would hide the failure.
+    const result = await generateImage({ model, prompt, abortSignal: signal, maxRetries: 0 });
+    const images = result.images;
+    if (images.length === 0) {
+      throw new ProviderCallError({
+        kind: 'provider',
+        code: 'no_image',
+        message: `${req.modelId} returned no image.`,
+        retryable: false,
+      });
+    }
+
+    const count = images.length === 1 ? 'an image' : `${images.length} images`;
+    const note = `Generated ${count} with ${req.modelId}.`;
+    yield { type: 'text', delta: note };
+    if (req.outputTypes.includes('text')) {
+      yield { type: 'part', part: { type: 'text', text: note } };
+    }
+    for (const [index, file] of images.entries()) {
+      const mime = file.mediaType === '' ? 'image/png' : file.mediaType;
+      const bytes = file.uint8Array;
+      yield {
+        type: 'part',
+        part: {
+          type: 'image',
+          // A placeholder the engine replaces with the stored artifact's id (FR-MM-003).
+          artifactId: newId(),
+          mime,
+          name: `image-${index + 1}.${EXTENSION_BY_MIME[mime] ?? 'png'}`,
+          size: bytes.byteLength,
+        },
+        bytes,
+      };
+    }
+
+    const { inputTokens, outputTokens } = result.usage;
+    if (inputTokens !== undefined || outputTokens !== undefined) {
+      yield { type: 'usage', tokensIn: inputTokens ?? 0, tokensOut: outputTokens ?? 0 };
+    }
+    yield { type: 'finish', reason: 'stop' };
+  } catch (error) {
+    throw new ProviderCallError(mapProviderError(error, { signal }));
+  }
+}
+
 /**
  * Wrap a provider's AI SDK handle as a `ProviderAdapter`.
  *
@@ -549,6 +648,10 @@ export function createAiSdkAdapter(options: AiSdkAdapterOptions): ProviderAdapte
     ...(options.embed === undefined ? {} : { embed: options.embed }),
 
     generate(req: GenerateRequest, signal: AbortSignal): AsyncIterable<StreamChunk> {
+      const image = options.image;
+      if (image !== undefined && isImageGenerationModel(req.modelId)) {
+        return generateImages(image(req.modelId), req, signal);
+      }
       return (async function* (): AsyncGenerator<StreamChunk> {
         try {
           const tools = toToolSet(req.tools);

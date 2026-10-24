@@ -16,6 +16,7 @@ import type { ErrorKind, Id, NodeError, ProviderState } from '@ace/contracts';
 export {
   FINISH_REASONS,
   type AgentTurn,
+  type CommandApproval,
   type FinishReason,
   type GenerateRequest,
   type ModelInfo,

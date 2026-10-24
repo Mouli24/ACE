@@ -150,6 +150,20 @@ export interface GenerateRequest {
    * `workingDir` the adapter still runs read-only in a throwaway folder, whatever is asked here.
    */
   cliAccess?: { access: WorkspaceAccess; allowedCommands: string[] };
+  /**
+   * D403: asks about one shell command a coding-agent CLI at `edit_commands` wants to run and its
+   * allowed commands do not cover — the person's approval card, as an API model's `run_command`
+   * gets, with Always allow. It resolves once they decide (or the turn is stopped). Only a CLI
+   * adapter that can ask in the middle of a call reads it (Claude Code); without it such a command
+   * is refused, as before.
+   */
+  approveCommand?: (command: string) => Promise<CommandApproval>;
+}
+
+/** D403: the person's answer about one command: run it, or not — and what to tell the model. */
+export interface CommandApproval {
+  allow: boolean;
+  message?: string;
 }
 
 /**

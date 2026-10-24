@@ -38,6 +38,7 @@ import {
   createEventBus,
   createGraphService,
   createGuardrailEvaluator,
+  saveAllowedCommand,
   createIngestionWorker,
   createKnowledgeService,
   createLogger,
@@ -1097,6 +1098,12 @@ export async function startEngine(options: StartEngineOptions): Promise<RunningE
     policies: guardrailPolicies,
     checks,
     masker,
+    // D402: an image model's pictures in a chat reply are stored as a run's are.
+    artifacts: materialiser,
+    // D403: a Claude Code command at Edit + commands is judged and always-allowed as a run's is.
+    classifyCommand,
+    saveAllowedCommand: (workflowId, nodeId, prefix) =>
+      saveAllowedCommand(graph, workflowId, nodeId, prefix),
     startRun: async (workflowId, request) => (await runs.beginRun(workflowId, request)).run,
     tools: toolProvider,
     checkpoints,

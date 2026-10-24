@@ -14,6 +14,7 @@ import {
   requireEmbedModel,
   statusFromProbe,
   withFamilyDefaults,
+  withImageGeneration,
   type FetchLike,
 } from './ai-sdk.js';
 
@@ -82,7 +83,8 @@ export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
     let pageToken: string | undefined;
     for (let pages = 0; pages < MAX_LIST_PAGES; pages += 1) {
       const body = await page(pageToken);
-      models.push(...parseGoogleModelList(body));
+      // D402: a Gemini image model is called through the image path below, so it is usable.
+      models.push(...parseGoogleModelList(body).map(withImageGeneration));
       const { nextPageToken } = body as { nextPageToken?: unknown };
       if (typeof nextPageToken !== 'string' || nextPageToken === '') break;
       pageToken = nextPageToken;
@@ -99,6 +101,7 @@ export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
   return createAiSdkAdapter({
     type: 'google',
     model: (modelId) => provider(modelId),
+    image: (modelId) => provider.image(modelId),
     check: () => statusFromProbe(probe),
     listModels: listAll,
     embed: async (texts, embedOptions) => {

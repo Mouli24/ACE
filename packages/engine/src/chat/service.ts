@@ -1,4 +1,5 @@
 import {
+  APPROVAL_COMMAND_MAX,
   APPROVAL_PREVIEW_MAX,
   DEFAULT_CLI_PERMISSION,
   DEFAULT_CONTEXT_POLICY,
@@ -10,6 +11,7 @@ import {
   isCliProviderType,
   type WorkspaceAccess,
   type ActivityItem,
+  type ApprovalCommand,
   type ApprovalDecision,
   type ApprovalDecisionKind,
   type ApprovalRequest,
@@ -53,8 +55,10 @@ import type { Logger } from '../logging/index.js';
 import type {
   CheckpointRecorder,
   CheckpointRecording,
+  CommandApproval,
   GenerateRequest,
   ModelRouter,
+  ProducedPart,
   ProviderAdapter,
   Repository,
   Scope,
@@ -63,9 +67,10 @@ import type {
 } from '../ports/index.js';
 import { createSemaphore, type Semaphore } from '../providers/semaphore.js';
 import { usageFor, withReportedCost, type PricedProvider } from '../runs/cost.js';
+import { commandGate, type CommandClassifier, type CommandGate } from '../runs/agentic/commands.js';
 import { agentSystemPrompt } from '../runs/agentic/system-prompt.js';
 import { CLI_SESSION_MIN_TIMEOUT_MS } from '../runs/executor.js';
-import { redactArgs, type ToolProvider } from '../runs/tool-loop.js';
+import { redactArgs, type ArtifactMaterialiser, type ToolProvider } from '../runs/tool-loop.js';
 import { maskSecrets } from '../security/secret-patterns.js';
 import { activityItemFor } from './activity.js';
 import {
@@ -209,6 +214,8 @@ export interface ChatService {
     requestId: Id,
     kind: ApprovalDecisionKind,
     note?: string,
+    /** D403: approve with Always allow — only a command card that offers a prefix takes it. */
+    always?: boolean,
   ): Promise<ApprovalDecision>;
   /**
    * PG-1.6 (D352) `POST /chat/threads/:id/messages/:messageId/edit`: the user message and every
@@ -272,6 +279,21 @@ export interface ChatServiceDeps {
    * record them against (FR-CHAT-005). Absent: tool results reach the model unchecked.
    */
   contextGuard?: Pick<ContextGuard, 'inspect'>;
+  /**
+   * D402: stores the media an image model answers with, as a run's executor does (FR-MM-003), so
+   * the reply carries references to it. Absent: such a reply keeps only its words.
+   */
+  artifacts?: Pick<ArtifactMaterialiser, 'store'>;
+  /**
+   * D403: `@ace/tools`' `classifyCommand`, which a run's commands are judged by — here, a command
+   * Claude Code wants to run at Edit + commands. Absent: every such command asks, with no Always allow.
+   */
+  classifyCommand?: CommandClassifier;
+  /**
+   * D403: Always allow on a chat command card saves the prefix on the node, as a run's does
+   * (`saveAllowedCommand`). Absent: it is allowed for the rest of the turn only.
+   */
+  saveAllowedCommand?: (workflowId: Id, nodeId: Id, prefix: string) => Promise<unknown>;
   now?: () => string;
   nextId?: () => string;
   tokenBatchMs?: number;
@@ -548,16 +570,26 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     requestId: Id,
     kind: ApprovalDecisionKind,
     note?: string,
+    always?: boolean,
   ): Promise<ApprovalDecision> {
     const pending = chatApprovals.get(requestId);
     if (pending === undefined || pending.request.threadId !== threadId) {
       throw new ChatApprovalNotFoundError(threadId, requestId);
+    }
+    // D403: Always allow is a command card's, and only when the card offers a prefix (D376).
+    const prefix =
+      always === true && kind === 'approve' && pending.request.command?.denylisted !== true
+        ? pending.request.command?.allowPrefix
+        : undefined;
+    if (always === true && prefix === undefined) {
+      throw new ChatActionInvalidError("This command can't be always-allowed.");
     }
     chatApprovals.delete(requestId);
     const decision: ApprovalDecision = {
       requestId,
       decision: kind,
       ...(note === undefined ? {} : { note }),
+      ...(prefix === undefined ? {} : { always: true as const, prefix }),
       decidedAt: now(),
     };
     try {
@@ -572,10 +604,12 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   async function askApproval(input: {
     threadId: Id;
     node: ChatNode;
-    check: GuardrailCheck;
+    check: Pick<GuardrailCheck, 'type'>;
     reason: string;
     call: ChatToolRequest;
     signal: AbortSignal;
+    /** D403: a command's card — the line, and the prefix Always allow would save. */
+    command?: ApprovalCommand;
   }): Promise<ApprovalDecision> {
     if (input.signal.aborted) throw new Error('stopped before the approval was asked');
     const request: ApprovalRequest = {
@@ -590,6 +624,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       preview: maskSecrets(
         `${input.call.name} ${JSON.stringify(redactArgs(input.call.args))}`,
       ).slice(0, APPROVAL_PREVIEW_MAX),
+      ...(input.command === undefined ? {} : { command: input.command }),
       requestedAt: now(),
     };
     const decided = new Promise<ApprovalDecision>((resolve, reject) => {
@@ -780,6 +815,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     let failure: NodeError | undefined;
     /** D302: what the turn did in the project — a CLI's activity or the API tool calls. */
     const activity: ActivityItem[] = [];
+    /** D402: the media the model answered with — an image model's pictures — with their bytes. */
+    const media: ProducedPart[] = [];
+    /** …and the same media once stored, as the references the reply carries. */
+    let storedMedia: Part[] = [];
     let toolsOffered = false;
     let limitReached = false;
     // D375: an agentic node's turn is bounded by its Max turns, as its run steps are.
@@ -1025,6 +1064,76 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
               };
             };
 
+      /*
+       * D403: a command Claude Code wants to run at Edit + commands that the node's allowed commands
+       * do not cover (the CLI runs covered ones itself). The policy's tool point judges it as it would
+       * an API model's `run_command`; when that asks, the chat shows the command card, and Always
+       * allow covers the rest of the turn and is saved on the node.
+       */
+      const turnAllowed =
+        node.kind === 'agent' ? [...agentWorkspaceOf(node.config).allowedCommands] : [];
+      const approveCommand = async (command: string): Promise<CommandApproval> => {
+        const gate: CommandGate =
+          deps.classifyCommand === undefined
+            ? { kind: 'ask', denylisted: false }
+            : commandGate(command, turnAllowed, deps.classifyCommand);
+        if (gate.kind === 'allow') return { allow: true };
+
+        let check: Pick<GuardrailCheck, 'type'> = { type: 'destructive_action' };
+        let reason = `${node.name} wants to run a command in the project folder.`;
+        const runCommand = deps.tools?.get('run_command');
+        if (guardrails !== undefined && policy !== null && runCommand !== undefined) {
+          const point = evaluateChatTool(
+            policy,
+            {
+              definition: runCommand.definition,
+              args: { command },
+              enabledTools: ['run_command'],
+              sandboxDir: workspace ?? '',
+              allowedDomains,
+            },
+            guardrails,
+          );
+          toolVerdicts.push(...point.verdicts);
+          if (point.kind === 'allow') return { allow: true };
+          if (point.kind === 'block') {
+            return { allow: false, message: `ACE's guardrails blocked this command: ${point.reason}` };
+          }
+          check = point.check;
+          reason = point.reason;
+        }
+
+        const decision = await askApproval({
+          threadId,
+          node,
+          check,
+          reason,
+          call: { callId: '', name: 'run_command', args: { command } },
+          signal: stopSignal,
+          command: {
+            text: maskSecrets(command).slice(0, APPROVAL_COMMAND_MAX),
+            ...(gate.allowPrefix === undefined ? {} : { allowPrefix: gate.allowPrefix }),
+            denylisted: gate.denylisted,
+          },
+        });
+        if (decision.decision === 'reject') {
+          return {
+            allow: false,
+            message:
+              decision.note === undefined
+                ? 'The person denied this command.'
+                : `The person denied this command: ${decision.note}`,
+          };
+        }
+        if (decision.always === true && decision.prefix !== undefined) {
+          turnAllowed.push(decision.prefix);
+          void deps.saveAllowedCommand?.(node.workflowId, node.id, decision.prefix).catch((error) =>
+            logger.warn({ subsystem: 'chat', threadId, err: error }, 'allowed command not saved'),
+          );
+        }
+        return { allow: true };
+      };
+
       const { reasoningEffort } = node.config.execution;
 
       /** One model call, inside this provider's concurrency gate (FR-PRV-009). */
@@ -1056,6 +1165,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
               ...(workspace === undefined ? {} : { workingDir: workspace }),
               // D386: …or, for an agentic node, at the node's own level.
               ...(cliAccess === undefined ? {} : { cliAccess }),
+              // D403: at Edit + commands, a command outside the allowed list is put to the person.
+              ...(cliAccess?.access === 'edit_commands' ? { approveCommand } : {}),
               ...(options.tools === undefined ? {} : { tools: options.tools }),
               ...(options.toolResults === undefined ? {} : { toolResults: options.toolResults }),
             },
@@ -1085,6 +1196,12 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
               answeredBy = chunk.modelId;
             } else if (chunk.type === 'tool_call') {
               requested.push({ callId: chunk.callId, name: chunk.name, args: chunk.args });
+            } else if (chunk.type === 'part') {
+              // D402: the words already streamed as text; only the media is kept from here.
+              const { part } = chunk;
+              if (part.type !== 'text' && part.type !== 'json' && part.type !== 'code') {
+                media.push(chunk.bytes === undefined ? { part } : { part, bytes: chunk.bytes });
+              }
             } else if (chunk.type === 'activity') {
               // The CLI already did this (D261): kept as what it did, never what it read.
               activity.push(
@@ -1137,6 +1254,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       if (stopSignal.aborted) throw new Error('stopped');
       // D287: a result the context point blocked ends the turn as a stored error, with its reason.
       if (loop.blocked !== undefined) failure = loop.blocked;
+      // D402: an image model's pictures, stored so the reply can reference them (FR-MM-003).
+      if (failure === undefined && media.length > 0 && deps.artifacts !== undefined) {
+        storedMedia = await deps.artifacts.store(media);
+      }
     } catch (error) {
       failure = stopSignal.aborted
         ? cancelledError()
@@ -1189,7 +1310,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     }
 
     /* The output point (FR-CHAT-008): a block turns the reply into `[blocked by guardrail: …]`. */
-    let replyParts: Part[] = [{ type: 'text', text }];
+    let replyParts: Part[] = [{ type: 'text', text }, ...storedMedia];
     let verdicts: ChatVerdict[] = [...toolVerdicts];
     if (guardrails !== undefined) {
       const checked = evaluateChatReply(policy, replyParts, guardrails);
@@ -1302,8 +1423,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         .filter((request) => request.threadId === threadId);
     },
 
-    decideApproval: (threadId, requestId, kind, note) =>
-      settleApproval(threadId, requestId, kind, note),
+    decideApproval: (threadId, requestId, kind, note, always) =>
+      settleApproval(threadId, requestId, kind, note, always),
 
     async retryMessage(threadId, messageId, options = {}) {
       const { thread, owner } = await threadWithNode(threadId);
