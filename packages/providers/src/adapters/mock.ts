@@ -208,6 +208,13 @@ const SPECS: readonly MockModelSpec[] = [
     inputTypes: ['text'],
     outputTypes: ['text'],
   },
+  // D357: Debate's deterministic debater and judge — see `mockDebateReply`.
+  {
+    modelId: 'mock-debate',
+    displayName: 'Mock debate',
+    inputTypes: ['text'],
+    outputTypes: ['text'],
+  },
 ];
 
 export const MOCK_MODELS: readonly ModelInfo[] = SPECS.map((spec) => ({
@@ -489,6 +496,91 @@ function abortError(signal?: AbortSignal): ProviderCallError {
 export const SCRIPT_HOLD = '[[hold]]';
 const SCRIPT_SECTION = /^\[\[turn (\d+|\*)\]\]\s*$/gmu;
 const REPAIR_SUFFIX = '\n\nYour previous answer was rejected:';
+
+/**
+ * D357: `mock-debate`, a debater and judge that follow the debate prompts (D343) with no model,
+ * so a debate runs end to end with zero network — the eval script's `--fake` and the real engine
+ * in tests and demos. It reads only what the prompt says: its label, the round, the options, the
+ * last round's turns, and the final round for the judge. It never sees a name (D345).
+ *
+ * - An opening answers by its label: options[A=0, B=1, …] in choice mode, "Position X" when free.
+ * - A rebuttal keeps its own last answer and rebuts the first other turn it was shown, except
+ *   debater B in round 1, which changes its mind to the turn it rebuts when that one disagrees.
+ * - The judge takes the first final turn's answer, cites it, and lists every final turn that
+ *   disagrees as dissent.
+ */
+export function mockDebateReply(prompt: string): Record<string, unknown> {
+  const options = [...(/^Answer: exactly one of: (.+)$/mu.exec(prompt)?.[1] ?? '').matchAll(/"([^"]*)"/gu)].map(
+    (match) => match[1] ?? '',
+  );
+
+  if (/^You are the judge of a debate\./mu.test(prompt)) {
+    const finalSection = prompt.split('FINAL ROUND (full):')[1]?.split('EARLIER ROUNDS')[0] ?? '';
+    const finals = [...finalSection.matchAll(/^\[(R\d-([A-E]))\] (.+?) \| /gmu)].map((match) => ({
+      turnId: match[1] ?? '',
+      label: match[2] ?? '',
+      answer: match[3] ?? '',
+    }));
+    const chosen = finals[0];
+    const answer = chosen?.answer ?? options[0] ?? 'No answer';
+    return {
+      answer,
+      confidence: 0.7,
+      rationale: [
+        {
+          point: 'Mock judge: the first final argument stood up best.',
+          supportedBy: [chosen?.turnId ?? 'judge'],
+        },
+      ],
+      dissent: finals
+        .filter((turn) => turn.answer !== answer)
+        .map((turn) => ({
+          label: turn.label,
+          answer: turn.answer,
+          strongestArgument: `Mock: debater ${turn.label}'s best point for "${turn.answer}".`,
+          turnId: turn.turnId,
+        })),
+      openQuestions: [],
+    };
+  }
+
+  const label = /^You are debater ([A-E])\b/mu.exec(prompt)?.[1] ?? 'A';
+  const index = 'ABCDE'.indexOf(label);
+  const round = Number(/^Round (\d) of \d/mu.exec(prompt)?.[1] ?? '0');
+  const opening = options.length > 0 ? (options[index % options.length] ?? '') : `Position ${label}`;
+  const confidence = Math.min(0.9, 0.5 + 0.1 * index);
+  const reasoning = (answer: string): string =>
+    `Mock debater ${label}, round ${round}: an argument for "${answer}".`;
+
+  if (round === 0) return { answer: opening, confidence, reasoning: reasoning(opening) };
+
+  const own = new RegExp(`^\\[R\\d-${label}\\] \\(you\\) (.+?) \\| `, 'mu').exec(prompt)?.[1] ?? opening;
+  const target = /^\[(R\d-[A-E])\] (?!\(you\))(?!\(no valid)(.+?) \| /mu.exec(prompt);
+  const targetId = target?.[1];
+  const targetAnswer = target?.[2];
+  const changes = label === 'B' && round === 1 && targetAnswer !== undefined && targetAnswer !== own;
+  const answer = changes ? (targetAnswer ?? own) : own;
+  return {
+    answer,
+    confidence,
+    reasoning: reasoning(answer),
+    rebuttals:
+      targetId === undefined
+        ? []
+        : [
+            {
+              targetTurnId: targetId,
+              claim: `Debater ${targetId.slice(-1)}'s main claim.`,
+              response: changes ? 'It holds; I was wrong.' : 'It does not hold against my answer.',
+            },
+          ],
+    positionChanged: changes,
+    changedBecause:
+      changes && targetId !== undefined
+        ? { turnId: targetId, argument: `Mock: ${targetId}'s argument beat mine.` }
+        : null,
+  };
+}
 
 /** The `## Instructions` section of an assembled prompt, without any repair the executor added. */
 function scriptOf(text: string): string {
@@ -970,6 +1062,20 @@ export function createMockAdapter(options: MockAdapterOptions = {}): MockProvide
         }
         if (holdAt >= 0) await untilAborted(signal);
         yield* finishText(lines.join('\n'));
+        return;
+      }
+
+      case 'mock-debate': {
+        const reply = mockDebateReply(req.prompt);
+        const fence = '```';
+        const text = `Mock debate turn.\n\n${fence}json\n${JSON.stringify(reply, null, 2)}\n${fence}`;
+        // Line by line, so a watcher sees a turn being written.
+        const lines = text.split('\n');
+        for (const [index, line] of lines.entries()) {
+          await pause(TEXT_DELAY_MS, signal, sleep);
+          yield { type: 'text', delta: index === lines.length - 1 ? line : `${line}\n` };
+        }
+        yield* finishText(text);
         return;
       }
 

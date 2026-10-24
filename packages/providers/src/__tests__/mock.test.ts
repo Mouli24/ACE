@@ -8,6 +8,7 @@ import {
   MOCK_PRICE_TABLE_VERSION,
   createMockAdapter,
   formatArtifactReference,
+  mockDebateReply,
 } from '../adapters/mock.js';
 import { MOCK_MEDIA_TYPES, mockMediaFixture } from '../adapters/mock-media.js';
 
@@ -140,6 +141,7 @@ describe('TC-MOD-001 the mock lists every model of §2.6', () => {
       'mock-summary',
       // D315: Domain's scriptable model.
       'mock-script',
+      'mock-debate',
     ]);
   });
 
@@ -1091,5 +1093,124 @@ describe('D302 a chat turn has no run, so the mock counts its calls per turn', (
     await call('turn-a');
     // a second chat turn starts its own count, as a second run would
     await expect(call('turn-b')).rejects.toMatchObject({ nodeError: { code: 'http_429' } });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* D357 mock-debate                                                            */
+/* -------------------------------------------------------------------------- */
+
+describe('D357 mock-debate answers each debate prompt by its contract', () => {
+  const choice = 'Answer: exactly one of: "yes", "no"';
+  const lastJson = (text: string): Record<string, unknown> => {
+    const blocks = [...text.matchAll(/```json\s*\n([\s\S]*?)```/g)];
+    return JSON.parse(blocks.at(-1)?.[1] ?? 'null') as Record<string, unknown>;
+  };
+
+  it('opens with an answer from the options, by its label', () => {
+    const reply = mockDebateReply(
+      [
+        'You are debater B in a structured debate. Other debaters are answering the same question on their own. You will see their answers next round.',
+        'QUESTION:',
+        'Redis?',
+        choice,
+      ].join('\n'),
+    );
+    expect(reply).toMatchObject({
+      answer: 'no',
+      confidence: expect.any(Number),
+      reasoning: expect.any(String),
+    });
+    expect(reply).not.toHaveProperty('rebuttals');
+  });
+
+  it('answers a free question in its own words', () => {
+    const reply = mockDebateReply(
+      'You are debater C in a structured debate.\nAnswer: a direct answer to the question',
+    );
+    expect(reply).toMatchObject({ answer: 'Position C' });
+  });
+
+  it('rebuts another debater’s last-round turn and keeps its own answer', () => {
+    const reply = mockDebateReply(
+      [
+        'You are debater A in a structured debate.',
+        "Round 1 of 2. Below are last round's turns: yours and the other debaters'.",
+        'LAST ROUND:',
+        '[R0-A] (you) yes | 0.5 | mine',
+        '[R0-B] no | 0.6 | theirs',
+        '[R0-C] (no valid turn this round)',
+        choice,
+      ].join('\n'),
+    );
+    expect(reply).toMatchObject({
+      answer: 'yes',
+      rebuttals: [{ targetTurnId: 'R0-B', claim: expect.any(String), response: expect.any(String) }],
+      positionChanged: false,
+      changedBecause: null,
+    });
+  });
+
+  it('B changes its mind in round 1 when the turn it rebuts disagrees, citing that turn', () => {
+    const reply = mockDebateReply(
+      [
+        'You are debater B in a structured debate.',
+        'Round 1 of 2.',
+        'LAST ROUND:',
+        '[R0-A] yes | 0.5 | a',
+        '[R0-B] (you) no | 0.6 | b',
+        choice,
+      ].join('\n'),
+    );
+    expect(reply).toMatchObject({
+      answer: 'yes',
+      positionChanged: true,
+      changedBecause: { turnId: 'R0-A', argument: expect.any(String) },
+    });
+  });
+
+  it('judges: picks the first final turn’s answer, cites it, and keeps every disagreement as dissent', () => {
+    const reply = mockDebateReply(
+      [
+        'You are the judge of a debate. Pick the best answer from the arguments, not from how many debaters hold it.',
+        choice,
+        'FINAL ROUND (full):',
+        '[R1-A] yes | 0.5 | a',
+        '[R1-B] no | 0.6 | b',
+        '  rebuts R0-A: "x" → y',
+        'EARLIER ROUNDS (compact):',
+        '[R0-A] yes | 0.5 | changed: no | rebuttals: none',
+      ].join('\n'),
+    );
+    expect(reply).toEqual({
+      answer: 'yes',
+      confidence: 0.7,
+      rationale: [{ point: expect.any(String), supportedBy: ['R1-A'] }],
+      dissent: [{ label: 'B', answer: 'no', strongestArgument: expect.any(String), turnId: 'R1-B' }],
+      openQuestions: [],
+    });
+  });
+
+  it('judges a debate with no turns by itself, citing "judge"', () => {
+    const reply = mockDebateReply(
+      ['You are the judge of a debate.', choice, 'FINAL ROUND (full):', '(no turns)'].join('\n'),
+    );
+    expect(reply).toMatchObject({ answer: 'yes', rationale: [{ supportedBy: ['judge'] }] });
+  });
+
+  it('streams the reply as a fenced json block, with usage', async () => {
+    const chunks = await collect(
+      createMockAdapter({ sleep: async () => undefined }).generate(
+        {
+          modelId: 'mock-debate',
+          prompt: `You are debater A in a structured debate.\n${choice}`,
+          outputTypes: ['text'],
+        },
+        new AbortController().signal,
+      ),
+    );
+    expect(lastJson(textOf(chunks))).toMatchObject({ answer: 'yes' });
+    expect(usageOf(chunks)?.tokensOut).toBeGreaterThan(0);
+    expect(finishOf(chunks)?.reason).toBe('stop');
   });
 });
