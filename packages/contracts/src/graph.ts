@@ -463,18 +463,25 @@ const MAX_ITERATIONS_MESSAGE = 'must be a whole number from 1 to 50';
  * checked by `validateLoopConfig` when an edge is written, not here, so an edge stored before
  * round 3 still loads (NFR-VER-01, D73).
  */
+const ExitConditionSchema = z.object({
+  path: z.string(),
+  equals: z.union([z.string(), z.number(), z.boolean()], {
+    error: 'must be a string, a number or true/false',
+  }),
+});
+
 export const LoopConfigSchema = z.object({
   maxIterations: z
     .number({ error: MAX_ITERATIONS_MESSAGE })
     .int(MAX_ITERATIONS_MESSAGE)
     .min(1, MAX_ITERATIONS_MESSAGE)
     .max(50, MAX_ITERATIONS_MESSAGE),
-  exitCondition: z.object({
-    path: z.string(),
-    equals: z.union([z.string(), z.number(), z.boolean()], {
-      error: 'must be a string, a number or true/false',
-    }),
-  }),
+  /**
+   * D404: optional. Absent, the loop runs exactly `maxIterations` times — the count the person
+   * chose when they drew it — and its source needs no json output, so any model can close a loop.
+   * Present, a json answer that matches it ends the loop early, as before.
+   */
+  exitCondition: ExitConditionSchema.optional(),
   onMax: z.enum(LOOP_ON_MAX, { error: 'must be continue or fail' }),
 });
 export type LoopConfig = z.infer<typeof LoopConfigSchema>;
@@ -492,7 +499,7 @@ export const DottedPathSchema = z
 
 /** A loop edge's config on the way in: `LoopConfig`, with an exit path the engine can read. */
 const LoopEdgeConfigSchema = LoopConfigSchema.extend({
-  exitCondition: LoopConfigSchema.shape.exitCondition.extend({ path: DottedPathSchema }),
+  exitCondition: ExitConditionSchema.extend({ path: DottedPathSchema }).optional(),
 });
 
 /** Why a loop ended, recorded on its last iteration's node run as `loopStop` (§2.4, FR-GRD-009). */
@@ -606,10 +613,11 @@ export function loopBody(edge: Pick<Edge, 'from' | 'to'>, edges: LoopGraph['edge
  * Decide whether an edge may exist as drawn, as far as loops are concerned (§2.4). Pure — the
  * engine's graph-ops and the Canvas's loop edge editor must reach the same verdict.
  *
- * A loop edge carries a loop config whose exit path is a dotted path, starts at a node with a json
- * output for that path to read, and leads back to a node strictly upstream along data edges — so
- * never onto itself. No node may sit in two loop bodies, because a node run has one iteration
- * number to count with (D84). A data edge carries no loop config at all.
+ * A loop edge carries a loop config and leads back to a node strictly upstream along data edges —
+ * so never onto itself. When the config has an exit condition, its path is a dotted path and the
+ * edge starts at a node with a json output for that path to read; without one (D404) the loop
+ * just runs its iterations, so any source will do. No node may sit in two loop bodies, because a
+ * node run has one iteration number to count with (D84). A data edge carries no loop config.
  *
  * `isConnectionAllowed` does not apply to a loop edge (D73). It is not a data connection: its
  * target's inputs are already fed, and the §1 demo's Reviewer sends json back into the Writer's
@@ -631,7 +639,7 @@ export function validateLoopConfig(
   if (edge.loop === undefined) {
     return refuse(
       'loop_config_missing',
-      'A loop edge needs max iterations, an exit condition and what to do at the maximum.',
+      'A loop edge needs a number of iterations and what to do at the maximum.',
     );
   }
 
@@ -646,7 +654,9 @@ export function validateLoopConfig(
 
   const source = graph.nodes.find((node) => node.id === edge.from.nodeId);
   // D353: a schema on the source makes its answer JSON, so a Review→Fix loop needs no json port.
-  if (source === undefined || !hasJsonOutput(source)) {
+  // D404: only an exit condition reads that json; a loop that runs its iterations needs none.
+  const readsJson = parsed.data.exitCondition !== undefined;
+  if (source === undefined || (readsJson && !hasJsonOutput(source))) {
     const name = source === undefined ? 'The loop source' : `"${source.name}"`;
     return refuse(
       'loop_source_not_json',

@@ -21,6 +21,11 @@ export type ConnectionVerdict =
  * The client-side half of FR-CON-002/003/005: the contract rule (`isConnectionAllowed`) plus the
  * plain-cycle check, run before an edge is drawn so the refusal reason shows at once. The engine
  * runs the same rules again; a 400 from it is surfaced too.
+ *
+ * D404: the cycle is judged first. An arrow that closes one can only become the loop edge, and a
+ * loop edge is not a data connection (D73) — a Reviewer's json goes back into a Writer's text
+ * input that the brief already fills — so the port rules must not refuse it before the Canvas can
+ * offer the loop. Likewise only data edges occupy an input, as the engine counts them.
  */
 export function checkConnection(
   nodes: readonly Node[],
@@ -34,9 +39,6 @@ export function checkConnection(
   if (!from || !to || !source || !target) {
     return { ok: false, code: 'unknown_port', reason: 'Connect an output port to an input port.' };
   }
-  const into = edges.filter((e) => e.to.portId === target.id).length;
-  const check = isConnectionAllowed(source, target, into);
-  if (!check.ok) return check;
   if (wouldCloseCycle(edges, from.id, to.id)) {
     return {
       ok: false,
@@ -45,5 +47,8 @@ export function checkConnection(
         'A data edge cannot close a cycle. Draw it as a loop edge instead — that is the one cycle a workflow may have.',
     };
   }
+  const into = edges.filter((e) => e.kind === 'data' && e.to.portId === target.id).length;
+  const check = isConnectionAllowed(source, target, into);
+  if (!check.ok) return check;
   return { ok: true, source, target, fromNodeId: from.id, toNodeId: to.id };
 }

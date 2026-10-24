@@ -26,7 +26,9 @@ const MONO_INPUT_CLASS = 'font-machine text-[12px]';
 
 /**
  * The loop edge editor (FR-CON-007, TC-CON-007): max iterations, the exit condition, and what to do
- * when the maximum is reached.
+ * when the maximum is reached. D404: a loop drawn on the Canvas has no exit condition — it runs the
+ * number of iterations the person chose — so it shows that one field; the exit condition and the
+ * at-the-maximum choice appear only on a loop that has one (a template's Review → Fix).
  *
  * Every field is refused inline by the contract's own rules — 0 and 51 iterations both carry the
  * contract's reason — and a refused draft commits nothing, so an out-of-range loop never reaches
@@ -86,11 +88,15 @@ export function LoopConfigFields({
   return (
     <div className={FIELD_GRID_CLASS} data-testid="loop-config-fields">
       <Field
-        label="Max iterations"
+        label={draft.exits ? 'Max iterations' : 'Iterations'}
         htmlFor={maxId}
         {...(errors.maxIterations === undefined
-          ? { hint: 'The loop stops here even if the exit condition never matches.' }
-          : { error: `Max iterations ${errors.maxIterations}.` })}
+          ? {
+              hint: draft.exits
+                ? 'The loop stops here even if the exit condition never matches.'
+                : 'How many times the loop runs. It always runs exactly this many.',
+            }
+          : { error: `Iterations ${errors.maxIterations}.` })}
       >
         <Input
           id={maxId}
@@ -107,59 +113,63 @@ export function LoopConfigFields({
         />
       </Field>
 
-      <SelectField
-        label="At the maximum"
-        value={draft.onMax}
-        options={LOOP_ON_MAX.map((onMax) => ({ value: onMax, label: ON_MAX_LABEL[onMax] }))}
-        onChange={(onMax) => {
-          debounced.cancel();
-          setDraft({ ...draft, onMax });
-          commit({ ...draft, onMax });
-        }}
-        disabled={disabled}
-      />
+      {draft.exits && (
+        <>
+          <SelectField
+            label="At the maximum"
+            value={draft.onMax}
+            options={LOOP_ON_MAX.map((onMax) => ({ value: onMax, label: ON_MAX_LABEL[onMax] }))}
+            onChange={(onMax) => {
+              debounced.cancel();
+              setDraft({ ...draft, onMax });
+              commit({ ...draft, onMax });
+            }}
+            disabled={disabled}
+          />
 
-      <Field
-        label="Exit when path"
-        htmlFor={pathId}
-        {...(errors.path === undefined
-          ? { hint: "A dotted path into the source node's json output." }
-          : { error: `The path ${errors.path}.` })}
-      >
-        <Input
-          id={pathId}
-          value={draft.path}
-          disabled={disabled}
-          placeholder="verdict"
-          spellCheck={false}
-          aria-invalid={errors.path === undefined ? undefined : true}
-          onChange={(event) => edit({ path: event.target.value })}
-          onBlur={blur}
-          onKeyDown={blurOnEnter}
-          className={MONO_INPUT_CLASS}
-        />
-      </Field>
+          <Field
+            label="Exit when path"
+            htmlFor={pathId}
+            {...(errors.path === undefined
+              ? { hint: "A dotted path into the source node's json output." }
+              : { error: `The path ${errors.path}.` })}
+          >
+            <Input
+              id={pathId}
+              value={draft.path}
+              disabled={disabled}
+              placeholder="verdict"
+              spellCheck={false}
+              aria-invalid={errors.path === undefined ? undefined : true}
+              onChange={(event) => edit({ path: event.target.value })}
+              onBlur={blur}
+              onKeyDown={blurOnEnter}
+              className={MONO_INPUT_CLASS}
+            />
+          </Field>
 
-      <Field
-        label="equals"
-        htmlFor={equalsId}
-        {...(errors.equals === undefined
-          ? { hint: `read as ${exitValueKind(draft.equals)}` }
-          : { error: `The value ${errors.equals}.` })}
-      >
-        <Input
-          id={equalsId}
-          value={draft.equals}
-          disabled={disabled}
-          placeholder="approved"
-          spellCheck={false}
-          aria-invalid={errors.equals === undefined ? undefined : true}
-          onChange={(event) => edit({ equals: event.target.value })}
-          onBlur={blur}
-          onKeyDown={blurOnEnter}
-          className={MONO_INPUT_CLASS}
-        />
-      </Field>
+          <Field
+            label="equals"
+            htmlFor={equalsId}
+            {...(errors.equals === undefined
+              ? { hint: `read as ${exitValueKind(draft.equals)}` }
+              : { error: `The value ${errors.equals}.` })}
+          >
+            <Input
+              id={equalsId}
+              value={draft.equals}
+              disabled={disabled}
+              placeholder="approved"
+              spellCheck={false}
+              aria-invalid={errors.equals === undefined ? undefined : true}
+              onChange={(event) => edit({ equals: event.target.value })}
+              onBlur={blur}
+              onKeyDown={blurOnEnter}
+              className={MONO_INPUT_CLASS}
+            />
+          </Field>
+        </>
+      )}
     </div>
   );
 }

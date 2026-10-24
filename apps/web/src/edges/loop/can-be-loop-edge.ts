@@ -9,12 +9,18 @@ import {
 /**
  * A loop config the contract accepts, so a probe is never refused for a reason the editor is about
  * to supply. `canBeLoopEdge` asks a structural question — may this arrow be the graph's one legal
- * cycle — and the numbers come later, from `LoopConfigFields`.
+ * cycle — and the numbers come later, from `LoopConfigFields`. It has no exit condition, like the
+ * loops the Canvas draws (D404), so a source without a json output is not refused for lacking one.
  */
 export const PROBE_LOOP_CONFIG: LoopConfig = {
   maxIterations: 1,
-  exitCondition: { path: 'verdict', equals: true },
   onMax: 'continue',
+};
+
+/** An exit condition the contract accepts, for probing one exit field at a time. */
+export const PROBE_EXIT_CONDITION: NonNullable<LoopConfig['exitCondition']> = {
+  path: 'verdict',
+  equals: true,
 };
 
 /**
@@ -23,8 +29,7 @@ export const PROBE_LOOP_CONFIG: LoopConfig = {
  *
  * The verdict is the contract's own `validateLoopConfig`, never a copy of its rules, so the menu
  * and the engine's graph-ops can never disagree: the target must be upstream of the source along
- * data edges, the source must have a json output for the exit condition to read, and the body must
- * not overlap another loop's. The refusal carries the contract's reason, ready to show as why the
+ * data edges, and the body must not overlap another loop's. The refusal carries the contract's reason, ready to show as why the
  * menu item is disabled.
  *
  * Pure. The candidate may be an edge already in `edges` (a data edge being converted) or one only

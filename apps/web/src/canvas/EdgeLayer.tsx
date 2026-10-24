@@ -25,9 +25,13 @@ import { GHOST_EDGE_CLASS } from './run-snapshot';
 import type { AceAnyFlowEdge } from './to-flow';
 import { edgePath } from './viewport';
 
-/** What an edge's chip says: a data edge its data type, a loop edge its limit and iteration. */
+/**
+ * What an edge's chip says: a data edge its data type, a loop edge its limit and iteration.
+ * `fixed` (D404): the loop has no exit condition, so it runs exactly `max` times.
+ */
 export type EdgeLabel =
-  { kind: 'data'; dataType: string } | { kind: 'loop'; max: number; iteration?: number };
+  | { kind: 'data'; dataType: string }
+  | { kind: 'loop'; max: number; iteration?: number; fixed?: boolean };
 
 export interface EdgeStrokeProps {
   id: string;
@@ -183,7 +187,8 @@ export const EdgeChip = memo(function EdgeChip({
   }
   return (
     <div data-testid={`loop-edge-label-${id}`} className={CHIP} style={style}>
-      <span data-testid={`loop-edge-glyph-${id}`}>↩</span> loop · max {label.max}
+      <span data-testid={`loop-edge-glyph-${id}`}>↩</span> loop ·{' '}
+      {label.fixed === true ? `${label.max}×` : `max ${label.max}`}
       {label.iteration !== undefined && (
         <>
           {' · '}
@@ -437,6 +442,7 @@ function labelOf(edge: AceAnyFlowEdge): EdgeLabel {
     return {
       kind: 'loop',
       max: data.loop.maxIterations,
+      ...(data.loop.exitCondition === undefined ? { fixed: true } : {}),
       ...(data.iteration === undefined ? {} : { iteration: data.iteration }),
     };
   }

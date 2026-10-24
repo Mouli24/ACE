@@ -1,6 +1,6 @@
 import { portId, validateLoopConfig, type LoopConfig, type LoopGraph } from '@ace/contracts';
 
-import { PROBE_LOOP_CONFIG } from './can-be-loop-edge';
+import { PROBE_EXIT_CONDITION, PROBE_LOOP_CONFIG } from './can-be-loop-edge';
 
 /**
  * Inline validation for the loop editor (FR-CON-007, TC-CON-007).
@@ -96,6 +96,8 @@ export function readMaxIterations(raw: string): number {
 
 export interface LoopDraft {
   maxIterations: string;
+  /** D404: whether the loop has an exit condition; without one it runs every iteration. */
+  exits: boolean;
   path: string;
   equals: string;
   onMax: LoopConfig['onMax'];
@@ -116,16 +118,17 @@ export function loopFieldErrors(draft: LoopDraft): LoopFieldErrors {
     maxIterations: readMaxIterations(draft.maxIterations),
   });
   if (maxIterations !== undefined) errors.maxIterations = maxIterations;
+  if (!draft.exits) return errors;
 
   const path = problem({
     ...PROBE_LOOP_CONFIG,
-    exitCondition: { ...PROBE_LOOP_CONFIG.exitCondition, path: draft.path },
+    exitCondition: { ...PROBE_EXIT_CONDITION, path: draft.path },
   });
   if (path !== undefined) errors.path = path;
 
   const equals = problem({
     ...PROBE_LOOP_CONFIG,
-    exitCondition: { ...PROBE_LOOP_CONFIG.exitCondition, equals: readExitValue(draft.equals) },
+    exitCondition: { ...PROBE_EXIT_CONDITION, equals: readExitValue(draft.equals) },
   });
   if (equals !== undefined) errors.equals = equals;
 
@@ -137,7 +140,9 @@ export function toLoopConfig(draft: LoopDraft): LoopConfig | undefined {
   if (Object.keys(loopFieldErrors(draft)).length > 0) return undefined;
   return {
     maxIterations: readMaxIterations(draft.maxIterations),
-    exitCondition: { path: draft.path, equals: readExitValue(draft.equals) },
+    ...(draft.exits
+      ? { exitCondition: { path: draft.path, equals: readExitValue(draft.equals) } }
+      : {}),
     onMax: draft.onMax,
   };
 }
@@ -145,8 +150,9 @@ export function toLoopConfig(draft: LoopDraft): LoopConfig | undefined {
 export function toLoopDraft(config: LoopConfig): LoopDraft {
   return {
     maxIterations: String(config.maxIterations),
-    path: config.exitCondition.path,
-    equals: String(config.exitCondition.equals),
+    exits: config.exitCondition !== undefined,
+    path: config.exitCondition?.path ?? '',
+    equals: config.exitCondition === undefined ? '' : String(config.exitCondition.equals),
     onMax: config.onMax,
   };
 }

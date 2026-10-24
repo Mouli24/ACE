@@ -5,13 +5,13 @@ import { useState } from 'react';
 import { LoopConfigFields } from './LoopConfigFields';
 
 /**
- * The starting loop for a new loop edge: three iterations, exiting on the review contract's
- * `verdict`, continuing with the last output at the maximum. It is a draft the editor shows rather
- * than something saved behind the operator's back — nothing is sent until they press the button.
+ * The starting loop for a new loop edge: three iterations, then the last output goes on. D404: no
+ * exit condition — the person says how many times it runs, so it works whatever model the source
+ * uses. It is a draft the editor shows rather than something saved behind the operator's back —
+ * nothing is sent until they press the button.
  */
 export const DEFAULT_LOOP_CONFIG: LoopConfig = {
   maxIterations: 3,
-  exitCondition: { path: 'verdict', equals: 'approved' },
   onMax: 'continue',
 };
 
@@ -61,9 +61,8 @@ export function MakeLoopEdgeDialog({
           <header className="flex flex-col gap-1 border-b border-[var(--line)] px-5 pb-4 pt-[18px]">
             <DialogTitle>Make this a loop edge?</DialogTitle>
             <DialogDescription>
-              {candidate.fromNodeName} would send its output back to {candidate.toNodeName}, and
-              everything between them would run again until the exit condition matches. This is the
-              only kind of cycle a workflow may have.
+              {candidate.fromNodeName} will send its output back to {candidate.toNodeName}, and
+              everything between them runs again. How many times should it run?
             </DialogDescription>
           </header>
 

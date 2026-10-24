@@ -59,9 +59,13 @@ export function jsonValueOf(parts: readonly Part[]): unknown {
  * `verdict: "Approved"` has not met `equals: "approved"`. A loop that silently accepted a near
  * miss would end a Review→Fix cycle on an unreviewed draft, which is the one outcome the cycle
  * exists to prevent.
+ *
+ * D404: a loop without an exit condition never ends early — it runs the iterations it was given.
  */
 export function exitConditionMet(loop: LoopConfig, output: readonly Part[]): boolean {
-  return readPath(jsonValueOf(output), loop.exitCondition.path) === loop.exitCondition.equals;
+  const exit = loop.exitCondition;
+  if (exit === undefined) return false;
+  return readPath(jsonValueOf(output), exit.path) === exit.equals;
 }
 
 /**
@@ -186,8 +190,9 @@ export function decideLoop(input: LoopDecisionInput): LoopDecision {
   const name = input.nameOf ?? ((id: Id) => id);
   const after = edge.loop.onMax === 'fail' ? 'fail' : 'deliver';
   const common = { edgeId: edge.id, sourceNodeId, targetNodeId, iteration, body } as const;
+  const exit = edge.loop.exitCondition;
 
-  if (exitConditionMet(edge.loop, input.output)) {
+  if (exit !== undefined && exitConditionMet(edge.loop, input.output)) {
     return {
       ...common,
       kind: 'stop',
@@ -196,7 +201,7 @@ export function decideLoop(input: LoopDecisionInput): LoopDecision {
       after: 'deliver',
       message:
         `The loop ended at iteration ${iteration}: "${name(sourceNodeId)}" returned ` +
-        `${edge.loop.exitCondition.path} = ${JSON.stringify(edge.loop.exitCondition.equals)}.`,
+        `${exit.path} = ${JSON.stringify(exit.equals)}.`,
     };
   }
 
@@ -205,6 +210,7 @@ export function decideLoop(input: LoopDecisionInput): LoopDecision {
     policyMax === undefined ? edge.loop.maxIterations : Math.min(edge.loop.maxIterations, policyMax);
 
   if (iteration >= cap) {
+    const ran = `${cap} iteration${cap === 1 ? '' : 's'}`;
     return {
       ...common,
       kind: 'stop',
@@ -212,10 +218,12 @@ export function decideLoop(input: LoopDecisionInput): LoopDecision {
       after,
       boundBy: policyMax !== undefined && policyMax < edge.loop.maxIterations ? 'policy' : 'config',
       message:
-        `The loop from "${name(sourceNodeId)}" back to "${name(targetNodeId)}" reached its maximum ` +
-        `of ${cap} iteration${cap === 1 ? '' : 's'} without ${edge.loop.exitCondition.path} ` +
-        `becoming ${JSON.stringify(edge.loop.exitCondition.equals)}. ` +
-        'Raise the maximum, relax the exit condition, or set the loop to continue with the last output.',
+        exit === undefined
+          ? // D404: running every iteration is how this loop is meant to end.
+            `The loop from "${name(sourceNodeId)}" back to "${name(targetNodeId)}" ran its ${ran}.`
+          : `The loop from "${name(sourceNodeId)}" back to "${name(targetNodeId)}" reached its maximum ` +
+            `of ${ran} without ${exit.path} becoming ${JSON.stringify(exit.equals)}. ` +
+            'Raise the maximum, relax the exit condition, or set the loop to continue with the last output.',
     };
   }
 

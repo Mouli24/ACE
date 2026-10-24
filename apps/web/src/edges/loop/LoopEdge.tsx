@@ -27,6 +27,8 @@ export const LOOP_EDGE_TYPE = 'loop';
 export function describeLoop(loop: LoopConfig | undefined): string {
   if (loop === undefined) return 'Loop edge';
   const { maxIterations, exitCondition, onMax } = loop;
+  // D404: a loop without an exit condition simply runs its iterations.
+  if (exitCondition === undefined) return `Loops ${maxIterations}×`;
   return [
     `Loops at most ${maxIterations}×`,
     `exits when ${exitCondition.path} = ${String(exitCondition.equals)}`,
