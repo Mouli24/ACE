@@ -1,7 +1,7 @@
 {
   "name": "@ace/desktop",
   "productName": "ACE",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ACE desktop app: an Electron shell around the local engine and the web app",
   "private": true,
   "type": "module",

@@ -330,8 +330,9 @@ async function engineStoppedUnexpectedly(
 
 async function startPackaged(win: BrowserWindow): Promise<void> {
   const layout = packagedLayout(process.resourcesPath);
+  // D408: the person's own ACE data, where `pnpm dev` keeps it — not a folder of the app's own.
   const folders = packagedFolders({
-    userData: app.getPath('userData'),
+    dataDir: resolveDevConfig({ env: process.env }).dataDir,
     documents: app.getPath('documents'),
   });
   mkdirSync(folders.dataDir, { recursive: true });

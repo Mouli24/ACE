@@ -89,8 +89,8 @@ Node process (`docs/DECISIONS.md` D292–D298).
 - **Installer:** `pnpm desktop:package` builds everything, stages the engine with its own
   `node.exe` (`apps/desktop/stage/`), smoke-tests it, and writes
   `apps/desktop/release/ACE-Setup-<version>.exe` (x64, unsigned, per-user, no admin). The
-  installed app keeps its data in `%APPDATA%\ACE\data` — never `~/.ace` — and new project
-  folders in `Documents\ACE\ace-projects`, so it runs side by side with a dev setup.
+  installed app opens your own ACE data, `~/.ace` — the same projects as `pnpm dev` and Start
+  ACE (D408). One ACE uses it at a time (D409): whichever starts second says the other is open.
 
 ## Layout
 

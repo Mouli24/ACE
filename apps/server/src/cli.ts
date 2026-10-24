@@ -7,6 +7,7 @@ import {
   type EngineToShellMessage,
 } from '@ace/contracts';
 
+import { holdEngineLock, refuseSecondEngine } from './engine-lock.js';
 import { readyLine, startEngine, type RunningEngine } from './server.js';
 
 export type SignalName = 'SIGINT' | 'SIGTERM';
@@ -108,8 +109,11 @@ export async function runEngine(io: CliIo = {}): Promise<{
       process.on(signal, handler);
     });
 
+  const dataDir = resolveDataDir(env);
+  // D409: one engine per data folder — a second one says so and stops before it opens anything.
+  await refuseSecondEngine(dataDir);
   const engine = await startEngine({
-    dataDir: resolveDataDir(env),
+    dataDir,
     env,
     // PG-1.4 (D359): the product finds and starts the local Ollama; ACE_LOCAL_RUNTIME=off opts
     // out, and an engine a test suite starts (Vitest sets VITEST) never starts anything.
@@ -118,7 +122,13 @@ export async function runEngine(io: CliIo = {}): Promise<{
       env['VITEST'] === undefined &&
       process.env['VITEST'] === undefined,
   });
-  const shutdown = createShutdownHandler(engine, exit);
+  const releaseLock = holdEngineLock(dataDir, engine.port);
+  // A real process also lets go of it on any exit; one a test runs in-process keeps its own.
+  if (io.exit === undefined) process.once('exit', releaseLock);
+  const shutdown = createShutdownHandler(engine, (code) => {
+    releaseLock();
+    exit(code);
+  });
 
   onSignal('SIGINT', () => shutdown('SIGINT'));
   onSignal('SIGTERM', () => shutdown('SIGTERM'));

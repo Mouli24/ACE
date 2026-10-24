@@ -22,7 +22,11 @@ export function packagedLayout(resourcesPath: string): PackagedLayout {
 }
 
 export interface PackagedFolders {
-  /** `%APPDATA%\ACE\data` — never `~/.ace`, so the installed app and a dev setup stay apart. */
+  /**
+   * D408: the person's ACE data — `~/.ace`, found the engine's way — the same folder `pnpm dev` and
+   * Start ACE use, so the desktop app opens every project they have. One engine at a time holds it
+   * (D409). The first desktop build's own `%APPDATA%\ACE\data` is left where it was.
+   */
   dataDir: string;
   /** Where the engine's logs land (pino, `<dataDir>/logs`). */
   logDir: string;
@@ -34,8 +38,8 @@ export interface PackagedFolders {
   workDir: string;
 }
 
-export function packagedFolders(paths: { userData: string; documents: string }): PackagedFolders {
-  const dataDir = join(paths.userData, 'data');
+export function packagedFolders(paths: { dataDir: string; documents: string }): PackagedFolders {
+  const { dataDir } = paths;
   return { dataDir, logDir: join(dataDir, 'logs'), workDir: join(paths.documents, 'ACE') };
 }
 

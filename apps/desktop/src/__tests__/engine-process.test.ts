@@ -228,12 +228,15 @@ describe('FR-DSK-002 the packaged layout (D298)', () => {
     });
   });
 
-  it('keeps data under userData, never ~/.ace, and works in Documents\\ACE', () => {
+  it("keeps data in the person's own ACE folder (D408), and works in Documents\\ACE", () => {
     expect(
-      packagedFolders({ userData: join('C:', 'AppData', 'ACE'), documents: join('C:', 'Docs') }),
+      packagedFolders({
+        dataDir: join('C:', 'Users', 'me', '.ace'),
+        documents: join('C:', 'Docs'),
+      }),
     ).toEqual({
-      dataDir: join('C:', 'AppData', 'ACE', 'data'),
-      logDir: join('C:', 'AppData', 'ACE', 'data', 'logs'),
+      dataDir: join('C:', 'Users', 'me', '.ace'),
+      logDir: join('C:', 'Users', 'me', '.ace', 'logs'),
       workDir: join('C:', 'Docs', 'ACE'),
     });
   });

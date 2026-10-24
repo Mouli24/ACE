@@ -11,6 +11,7 @@ import {
 
 const draft = (over: Partial<LoopDraft> = {}): LoopDraft => ({
   maxIterations: '3',
+  exits: true,
   path: 'verdict',
   equals: 'approved',
   onMax: 'continue',
@@ -88,6 +89,6 @@ describe('FR-CON-007 exit condition', () => {
   it('only ever hands back a config the contract itself accepts', () => {
     const config = toLoopConfig(draft({ maxIterations: '50', equals: 'true' }));
     expect(LoopConfigSchema.safeParse(config).success).toBe(true);
-    expect(config?.exitCondition.equals).toBe(true);
+    expect(config?.exitCondition?.equals).toBe(true);
   });
 });

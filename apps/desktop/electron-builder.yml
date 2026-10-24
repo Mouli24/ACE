@@ -39,16 +39,17 @@ electronVersion: 44.7.0
 electronDist: ../../node_modules/electron/dist
 
 win:
+  # The ACE mark (the in-app LogoMark's orange drop) on a dark tile, 512x512; electron-builder
+  # makes the .ico sizes from it.
+  icon: build/icon.png
   target:
     - target: nsis
       arch:
         - x64
-  # TODO(icon): the repo has no app icon yet, so Electron's default is used. Add build/icon.ico
-  # (256x256) and it is picked up from buildResources.
 
 nsis:
-  # Per-user, one click: installs to %LOCALAPPDATA%\Programs\ace, no admin prompt. Uninstalling
-  # leaves %APPDATA%\ACE\data (the user's projects, runs and settings) in place.
+  # Per-user, one click: installs to %LOCALAPPDATA%\Programs\ace, no admin prompt. The app opens
+  # the person's own ACE data, ~/.ace (D408), which uninstalling never touches.
   oneClick: true
   perMachine: false
   createDesktopShortcut: true
